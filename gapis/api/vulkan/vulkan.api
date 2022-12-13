@@ -1,0 +1,590 @@
+// Copyright (C) 2017 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Based off of the original vulkan.h header file which has the following
+// license.
+
+// Copyright (c) 2015 The Khronos Group Inc.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and/or associated documentation files (the
+// "Materials"), to deal in the Materials without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Materials, and to
+// permit persons to whom the Materials are furnished to do so, subject to
+// the following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Materials.
+//
+// THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+// MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+
+api_index 2
+
+import "api/constants.api"
+import "api/bitfields.api"
+import "api/enums.api"
+import "api/types.api"
+import "api/structs.api"
+import "api/vk11structs.api"
+import "api/vk12structs.api"
+
+import "api/properties_features_requirements.api"
+import "api/instance.api"
+import "api/physical_device.api"
+import "api/device.api"
+import "api/buffer_device_address.api"
+import "api/queue.api"
+import "api/memory.api"
+import "api/coherent_memory.api"
+import "api/image.api"
+import "api/buffer.api"
+import "api/descriptor.api"
+import "api/command_buffer_control.api"
+import "api/copy_clear_commands.api"
+import "api/draw_commands.api"
+import "api/pipeline.api"
+import "api/query_pool.api"
+import "api/renderpass_framebuffer.api"
+import "api/synchronization.api"
+import "api/queued_command_tracking.api"
+import "api/util.api"
+
+import "extensions/android_frame_boundary.api"
+import "extensions/ext_debug_marker.api"
+import "extensions/ext_debug_report.api"
+import "extensions/ext_debug_utils.api"
+import "extensions/ext_pipeline_creation_feedback.api"
+import "extensions/amd_buffer_marker.api"
+import "extensions/khr_create_renderpass2.api"
+import "extensions/khr_dedicated_allocation.api"
+import "extensions/khr_display.api"
+import "extensions/khr_display_swapchain.api"
+import "extensions/khr_get_memory_requirements2.api"
+import "extensions/khr_get_physical_device_properties2.api"
+import "extensions/khr_get_surface_capabilities2.api"
+import "extensions/khr_maintenance1.api"
+import "extensions/khr_surface.api"
+import "extensions/khr_swapchain.api"
+import "extensions/nv_dedicated_allocation.api"
+import "extensions/virtual_swapchain.api"
+import "extensions/khr_maintenance2.api"
+import "extensions/khr_maintenance3.api"
+import "extensions/khr_bind_memory2.api"
+import "extensions/khr_16bit_storage.api"
+import "extensions/khr_external_fence_capabilities.api"
+import "extensions/khr_external_memory_capabilities.api"
+import "extensions/android_external_memory_android_hardware_buffer.api"
+import "extensions/khr_external_semaphore_capabilities.api"
+import "extensions/khr_external_semaphore_fd.api"
+import "extensions/khr_variable_pointers.api"
+import "extensions/khr_sampler_ycbcr_conversion.api"
+import "extensions/ext_sampler_filter_minmax.api"
+import "extensions/amd_draw_indirect_count.api"
+import "extensions/khr_draw_indirect_count.api"
+import "extensions/khr_image_format_list.api"
+import "extensions/ext_scalar_block_layout.api"
+import "extensions/ext_hdr_metadata.api"
+import "extensions/khr_descriptor_update_template.api"
+import "extensions/khr_device_group_creation.api"
+import "extensions/khr_device_group.api"
+import "extensions/khr_buffer_device_address.api"
+import "extensions/google_display_timing.api"
+import "extensions/ext_host_query_reset.api"
+import "extensions/ext_pci_bus_info.api"
+import "extensions/khr_8bit_storage.api"
+import "extensions/amd_shader_core_properties.api"
+import "extensions/khr_uniform_buffer_standard_layout.api"
+import "extensions/khr_shader_subgroup_extended_types.api"
+import "extensions/khr_shader_clock.api"
+import "extensions/khr_vulkan_memory_model.api"
+import "extensions/khr_shader_float_controls.api"
+import "extensions/khr_shader_float16_int8.api"
+import "extensions/khr_shader_atomic_int64.api"
+import "extensions/khr_driver_properties.api"
+import "extensions/khr_timeline_semaphore.api"
+import "extensions/khr_shader_terminate_invocation.api"
+import "extensions/ext_line_rasterization.api"
+import "extensions/ext_vertex_attribute_divisor.api"
+import "extensions/ext_image_robustness.api"
+import "extensions/khr_multiview.api"
+import "extensions/ext_provoking_vertex.api"
+import "extensions/ext_transform_feedback.api"
+import "extensions/ext_blend_operation_advanced.api"
+import "extensions/ext_index_type_uint8.api"
+import "extensions/ext_custom_border_color.api"
+
+import "android/vulkan_android.api"
+import "linux/vulkan_linux.api"
+import "windows/vulkan_windows.api"
+import "mac/vulkan_mac.api"
+import "synthetic.api"
+import "errors.api"
+
+////////////////////////
+//  Extern functions  //
+////////////////////////
+
+extern void mapMemory(VkDeviceMemory handle, void** mem, u8[] slice)
+extern void unmapMemory(VkDeviceMemory handle, u8[] slice)
+extern void trackMappedCoherentMemory(u64 start, size size)
+extern void readMappedCoherentMemory(VkDeviceMemory memory, u64 offset_in_mapped, size readSize)
+extern void untrackMappedCoherentMemory(u64 start, size size)
+extern void enterSubcontext()
+extern void nextSubcontext()
+extern void leaveSubcontext()
+extern void resetSubcontext()
+extern void onPreSubcommand(ref!CommandReference ref)
+extern void onPostSubcommand(ref!CommandReference ref)
+extern void onCommandAdded(VkCommandBuffer buffer)
+extern void resetCmd(VkCommandBuffer buffer)
+extern ref!PhysicalDevicesAndProperties fetchPhysicalDeviceProperties(VkInstance instance, VkPhysicalDevice[] devs)
+extern ref!PhysicalDevicesMemoryProperties fetchPhysicalDeviceMemoryProperties(VkInstance instance, VkPhysicalDevice[] devs)
+extern ref!PhysicalDevicesAndQueueFamilyProperties fetchPhysicalDeviceQueueFamilyProperties(VkInstance instance, VkPhysicalDevice[] devs)
+extern ref!PhysicalDevicesFormatProperties fetchPhysicalDeviceFormatProperties(VkInstance instance, VkPhysicalDevice[] devs)
+extern ref!FetchedImageMemoryRequirements fetchImageMemoryRequirements(VkDevice device, ref!ImageObject image, bool hasSparseBit)
+extern VkMemoryRequirements fetchBufferMemoryRequirements(VkDevice device, VkBuffer buffer)
+extern ref!LinearImageLayouts fetchLinearImageSubresourceLayouts(VkDevice device, ref!ImageObject image, VkImageSubresourceRange rng)
+extern ref!DescriptorInfo fetchUsedDescriptors(ref!ShaderModuleObject pipeline)
+
+///////////////////////
+// Function pointers //
+///////////////////////
+// TODO: add support for function pointers.
+@external type void* PFN_vkAllocationFunction
+@pfn cmd void* vkAllocationFunction(
+    void*                   pUserData,
+    size                    size,
+    size                    alignment,
+    VkSystemAllocationScope allocationScope) {
+  return ?
+}
+
+@external type void* PFN_vkReallocationFunction
+@pfn cmd void* vkReallocationFunction(
+    void*                   pUserData,
+    void*                   pOriginal,
+    size                    size,
+    size                    alignment,
+    VkSystemAllocationScope allocationScope) {
+  return ?
+}
+
+@external type void* PFN_vkFreeFunction
+@pfn cmd void vkFreeFunction(
+    void* pUserData,
+    void* pMemory) {
+}
+
+@external type void* PFN_vkInternalAllocationNotification
+@pfn cmd void vkInternalAllocationNotification(
+    void*                    pUserData,
+    size                     size,
+    VkInternalAllocationType allocationType,
+    VkSystemAllocationScope  allocationScope) {
+}
+
+@external type void* PFN_vkInternalFreeNotification
+@pfn cmd void vkInternalFreeNotification(
+    void*                    pUserData,
+    size                     size,
+    VkInternalAllocationType allocationType,
+    VkSystemAllocationScope  allocationScope) {
+}
+
+@external type void* PFN_vkVoidFunction
+@pfn cmd void vkVoidFunction() {
+}
+
+//////////////////////////
+// Supported extensions //
+//////////////////////////
+
+@internal
+class ExtensionSet {
+  map!(string, bool) ExtensionNames
+}
+
+sub ref!ExtensionSet supportedInstanceExtensions() {
+  supported := new!ExtensionSet()
+  // Recognized instance extensions
+  supported.ExtensionNames["VK_EXT_debug_utils"] = true
+  supported.ExtensionNames["VK_KHR_surface"] = true
+  supported.ExtensionNames["VK_KHR_display"] = true
+  supported.ExtensionNames["VK_EXT_debug_report"] = true
+  supported.ExtensionNames["VK_KHR_xlib_surface"] = true
+  supported.ExtensionNames["VK_KHR_xcb_surface"] = true
+  supported.ExtensionNames["VK_KHR_wayland_surface"] = true
+  supported.ExtensionNames["VK_KHR_android_surface"] = true
+  supported.ExtensionNames["VK_KHR_win32_surface"] = true
+  supported.ExtensionNames["VK_KHR_get_physical_device_properties2"] = true
+  supported.ExtensionNames["VK_KHR_get_surface_capabilities2"] = true
+  supported.ExtensionNames["VK_KHR_external_memory_capabilities"] = true
+  supported.ExtensionNames["VK_KHR_external_semaphore_capabilities"] = true
+  supported.ExtensionNames["VK_KHR_external_fence_capabilities"] = true
+  supported.ExtensionNames["VK_EXT_swapchain_colorspace"] = true
+  supported.ExtensionNames["VK_KHR_device_group_creation"] = true
+  return supported
+}
+
+sub ref!ExtensionSet supportedDeviceExtensions() {
+  supported := new!ExtensionSet()
+  // Recognized device extensions
+  supported.ExtensionNames["VK_KHR_swapchain"] = true
+  supported.ExtensionNames["VK_KHR_display_swapchain"] = true
+  supported.ExtensionNames["VK_EXT_debug_marker"] = true
+  supported.ExtensionNames["VK_NV_dedicated_allocation"] = true
+  supported.ExtensionNames["VK_KHR_get_memory_requirements2"] = true
+  supported.ExtensionNames["VK_KHR_dedicated_allocation"] = true
+  supported.ExtensionNames["VK_KHR_bind_memory2"] = true
+  supported.ExtensionNames["VK_KHR_storage_buffer_storage_class"] = true
+  supported.ExtensionNames["VK_KHR_variable_pointers"] = true
+  supported.ExtensionNames["VK_KHR_shader_draw_parameters"] = true
+  supported.ExtensionNames["VK_KHR_relaxed_block_layout"] = true
+  supported.ExtensionNames["VK_KHR_16bit_storage"] = true
+  supported.ExtensionNames["VK_KHR_create_renderpass2"] = true
+  supported.ExtensionNames["VK_KHR_maintenance1"] = true
+  supported.ExtensionNames["VK_KHR_maintenance2"] = true
+  supported.ExtensionNames["VK_KHR_maintenance3"] = true
+  supported.ExtensionNames["VK_AMD_draw_indirect_count"] = true
+  supported.ExtensionNames["VK_KHR_draw_indirect_count"] = true
+  supported.ExtensionNames["VK_AMD_buffer_marker"] = true
+  supported.ExtensionNames["VK_KHR_sampler_ycbcr_conversion"] = true
+  supported.ExtensionNames["VK_KHR_image_format_list"] = true
+  supported.ExtensionNames["VK_KHR_sampler_mirror_clamp_to_edge"] = true
+  supported.ExtensionNames["VK_EXT_sampler_filter_minmax"] = true
+  supported.ExtensionNames["VK_EXT_pipeline_creation_feedback"] = true
+  supported.ExtensionNames["VK_EXT_scalar_block_layout"] = true
+  supported.ExtensionNames["VK_EXT_hdr_metadata"] = true
+  supported.ExtensionNames["VK_KHR_descriptor_update_template"] = true
+  supported.ExtensionNames["VK_KHR_device_group"] = true
+  supported.ExtensionNames["VK_GOOGLE_display_timing"] = true
+  supported.ExtensionNames["VK_EXT_host_query_reset"] = true
+  supported.ExtensionNames["VK_EXT_depth_range_unrestricted"] = true
+  supported.ExtensionNames["VK_EXT_pci_bus_info"] = true
+  supported.ExtensionNames["VK_EXT_shader_stencil_export"] = true
+  supported.ExtensionNames["VK_EXT_shader_subgroup_ballot"] = true
+  supported.ExtensionNames["VK_EXT_shader_subgroup_vote"] = true
+  supported.ExtensionNames["VK_EXT_shader_viewport_index_layer"] = true
+  supported.ExtensionNames["VK_KHR_storage_buffer_storage_class"] = true
+  supported.ExtensionNames["VK_KHR_8bit_storage"] = true
+  supported.ExtensionNames["VK_AMD_shader_core_properties"] = true
+  supported.ExtensionNames["VK_GOOGLE_decorate_string"] = true
+  supported.ExtensionNames["VK_GOOGLE_hlsl_functionality1"] = true
+  supported.ExtensionNames["VK_KHR_spirv_1_4"] = true
+  supported.ExtensionNames["VK_KHR_shader_subgroup_extended_types"] = true
+  supported.ExtensionNames["VK_KHR_shader_clock"] = true
+  supported.ExtensionNames["VK_KHR_vulkan_memory_model"] = true
+  supported.ExtensionNames["VK_KHR_multiview"] = true
+  supported.ExtensionNames["VK_KHR_shader_float_controls"] = true
+  supported.ExtensionNames["VK_KHR_shader_float16_int8"] = true
+  supported.ExtensionNames["VK_KHR_shader_atomic_int64"] = true
+  supported.ExtensionNames["VK_KHR_driver_properties"] = true
+  supported.ExtensionNames["VK_ANDROID_frame_boundary"] = true
+  supported.ExtensionNames["VK_KHR_external_semaphore"] = true
+  supported.ExtensionNames["VK_KHR_external_semaphore_fd"] = true
+  supported.ExtensionNames["VK_KHR_external_memory"] = true
+  supported.ExtensionNames["VK_EXT_queue_family_foreign"] = true
+  supported.ExtensionNames["VK_ANDROID_external_memory_android_hardware_buffer"] = true
+  supported.ExtensionNames["VK_EXT_line_rasterization"] = true
+  supported.ExtensionNames["VK_EXT_vertex_attribute_divisor"] = true
+  supported.ExtensionNames["VK_EXT_image_robustness"] = true
+  supported.ExtensionNames["VK_EXT_provoking_vertex"] = true
+  supported.ExtensionNames["VK_EXT_transform_feedback"] = true
+  supported.ExtensionNames["VK_KHR_shader_terminate_invocation"] = true
+  supported.ExtensionNames["VK_EXT_blend_operation_advanced"] = true
+  supported.ExtensionNames["VK_EXT_index_type_uint8"] = true
+  supported.ExtensionNames["VK_EXT_custom_border_color"] = true
+  supported.ExtensionNames["VK_KHR_separate_depth_stencil_layouts"] = true
+  supported.ExtensionNames["VK_KHR_uniform_buffer_standard_layout"] = true
+  supported.ExtensionNames["VK_QCOM_render_pass_store_ops"] = true
+  supported.ExtensionNames["VK_EXT_load_store_op_none"] = true
+  supported.ExtensionNames["VK_KHR_imageless_framebuffer"] = true
+  supported.ExtensionNames["VK_KHR_depth_stencil_resolve"] = true
+  supported.ExtensionNames["VK_EXT_descriptor_indexing"] = true
+  return supported
+}
+
+////////////////////////
+// Draw info tracking //
+////////////////////////
+
+// This contains the draw command parameters. Only one of the draw data should be
+// valid at a time. Others should be null.
+@internal class DrawParameters {
+  ref!vkCmdDrawArgs                         Draw
+  ref!vkCmdDrawIndexedArgs                  DrawIndexed
+  ref!vkCmdDrawIndirectArgs                 DrawIndirect
+  ref!vkCmdDrawIndexedIndirectArgs          DrawIndexedIndirect
+  ref!vkCmdDrawIndirectCountKHRArgs         DrawIndirectCountKHR
+  ref!vkCmdDrawIndexedIndirectCountKHRArgs  DrawIndexedIndirectCountKHR
+  ref!vkCmdDrawIndirectCountAMDArgs         DrawIndirectCountAMD
+  ref!vkCmdDrawIndexedIndirectCountAMDArgs  DrawIndexedIndirectCountAMD
+  ref!vkCmdDrawIndirectByteCountEXTArgs     DrawIndirectByteCountEXT
+}
+
+// This contains the information about a draw
+@internal class DrawInfo {
+  ref!FramebufferObject Framebuffer
+  // A mapping from the descriptor set bound numbers to descriptor set objects
+  map!(u32, ref!DescriptorSetObject) DescriptorSets
+  // The Last subpass number used in the draw
+  @hidden u32 LastSubpass
+  // The graphics pipeline used for the draw
+  ref!GraphicsPipelineObject GraphicsPipeline
+  // The vertex buffers used for the draw. This is a map of binding number to
+  // buffer bound do that binding.
+  map!(u32, BoundBuffer) BoundVertexBuffers
+  // The index buffer used for the draw
+  ref!BoundIndexBuffer BoundIndexBuffer
+  // The draw parameters used for the draw
+  DrawParameters CommandParameters
+  // The render pass in which this draw takes place
+  ref!RenderPassObject RenderPass
+  // Whether or not we are in an unclosed render pass
+  @hidden bool InRenderPass
+  // BufferBindingOffsets[setNum][bindingNum][bufferBindingNum] :=
+  //    buffer offset for given descriptor set number, binding number, and index of buffer binding
+  map!(u32, map!(u32, map!(u32, VkDeviceSize))) BufferBindingOffsets
+
+  // @extension("VK_EXT_transform_feedback")
+  // Transform Feedback buffers used for the draw. This is a map of binding number to
+  // buffer bound do that binding.
+  map!(u32, BoundBuffer) BoundTransformFeedbackBuffers
+
+  // A map of the current framebuffer attachements, either from
+  // VkFramebufferCreateInfo or VkRenderPassAttachmentBeginInfo
+  map!(u32, ref!ImageViewObject) FramebufferAttachments
+}
+
+@internal class DynamicPipelineState {
+  // The viewports set by vkCmdSetViewport
+  dense_map!(u32, VkViewport) Viewports
+  // The Scissors set by vkCmdSetScissor
+  dense_map!(u32, VkRect2D) Scissors
+  // The value set by vkCmdSetLineWidth
+  f32 LineWidth
+  // The values set by vkCmdSetLineStippleEXT
+  u32 LineStippleFactor
+  u16 LineStipplePattern
+  // The constant factor set by vkCmdSetDepthBias
+  f32 DepthBiasConstantFactor
+  // The clamp set by vkCmdSetDepthBias
+  f32 DepthBiasClamp
+  // The slope factor set by vkCmdSetDepthBias
+  f32 DepthBiasSlopeFactor
+  // The blend constants set by vkCmdSetBlendConstants
+  f32[4] BlendConstants
+  // The min depth bounds set by vkCmdSetDepthBounds
+  f32 MinDepthBounds
+  // The max depth bounds set by vkCmdSetDepthBounds
+  f32 MaxDepthBounds
+  // The front stencil state set by vkCmdSetStencil*
+  VkStencilOpState StencilFront
+  // The back stencil state set by vkCmdSetStencil*
+  VkStencilOpState StencilBack
+}
+
+// This contains the dispatch command parameters. Only one of the dispatch data should be
+// valid at a time. Others should be null.
+@internal class DispatchParameters {
+  ref!vkCmdDispatchArgs           Dispatch
+  ref!vkCmdDispatchIndirectArgs   DispatchIndirect
+}
+
+@internal class ComputeInfo {
+  // A mapping from the descriptor set bound numbers to descriptor set objects
+  map!(u32, ref!DescriptorSetObject) DescriptorSets
+  // The compute pipeline used for the dispatch
+  ref!ComputePipelineObject ComputePipeline
+  // BufferBindingOffsets[setNum][bindingNum][bufferBindingNum] :=
+  //    buffer offset for given descriptor set number, binding number, and index of buffer binding
+  map!(u32, map!(u32, map!(u32, VkDeviceSize))) BufferBindingOffsets
+  // The dispatch parameters used for the dispatch
+  DispatchParameters CommandParameters
+}
+
+@internal class PresentInfo {
+  // The number of images presented last present
+  @untracked
+  u32 PresentImageCount
+  // The images presented in the last present
+  map!(u32, ref!ImageObject) PresentImages
+  // The queue on which images are presented
+  VkQueue Queue
+}
+
+@internal class PushConstantInfo {
+  @hidden @nobox @internal u8[]     Data
+}
+
+enum LastSubmissionType {
+  SUBMIT  = 0
+  PRESENT = 1
+}
+
+/////////////////////////////
+// Internal State Tracking //
+/////////////////////////////
+
+// Dispatchable objects.
+@handleMap @serialize map!(VkInstance, ref!InstanceObject)             Instances
+@handleMap @serialize map!(VkPhysicalDevice, ref!PhysicalDeviceObject) PhysicalDevices
+@handleMap @serialize map!(VkDevice, ref!DeviceObject)                 Devices
+@handleMap @serialize map!(VkQueue, ref!QueueObject)                   Queues
+@handleMap @serialize map!(VkCommandBuffer, ref!CommandBufferObject)   CommandBuffers
+// Non-dispatchable objects.
+@handleMap @serialize map!(VkDeviceMemory, ref!DeviceMemoryObject)                  DeviceMemories
+@handleMap @serialize map!(VkBuffer, ref!BufferObject)                              Buffers
+@handleMap @serialize map!(VkBufferView, ref!BufferViewObject)                      BufferViews
+@handleMap @serialize map!(VkImage, ref!ImageObject)                                Images
+@handleMap @serialize map!(VkImageView, ref!ImageViewObject)                        ImageViews
+@handleMap @serialize map!(VkShaderModule, ref!ShaderModuleObject)                  ShaderModules
+@handleMap @serialize map!(VkPipeline, ref!GraphicsPipelineObject)                  GraphicsPipelines
+@handleMap @serialize map!(VkPipeline, ref!ComputePipelineObject)                   ComputePipelines
+@handleMap @serialize map!(VkPipelineLayout, ref!PipelineLayoutObject)              PipelineLayouts
+@handleMap @serialize map!(VkSampler, ref!SamplerObject)                            Samplers
+@handleMap @serialize map!(VkDescriptorSet, ref!DescriptorSetObject)                DescriptorSets
+@handleMap @serialize map!(VkDescriptorSetLayout, ref!DescriptorSetLayoutObject)    DescriptorSetLayouts
+@handleMap @serialize map!(VkDescriptorPool, ref!DescriptorPoolObject)              DescriptorPools
+@handleMap @serialize map!(VkFence, ref!FenceObject)                                Fences
+@handleMap @serialize map!(VkSemaphore, ref!SemaphoreObject)                        Semaphores
+@handleMap @serialize map!(VkEvent, ref!EventObject)                                Events
+@handleMap @serialize map!(VkQueryPool, ref!QueryPoolObject)                        QueryPools
+@handleMap @serialize map!(VkFramebuffer, ref!FramebufferObject)                    Framebuffers
+@handleMap @serialize map!(VkRenderPass, ref!RenderPassObject)                      RenderPasses
+@handleMap @serialize map!(VkPipelineCache, ref!PipelineCacheObject)                PipelineCaches
+@handleMap @serialize map!(VkCommandPool, ref!CommandPoolObject)                    CommandPools
+@handleMap @serialize map!(VkSurfaceKHR, ref!SurfaceObject)                         Surfaces
+@handleMap @serialize map!(VkSwapchainKHR, ref!SwapchainObject)                     Swapchains
+@handleMap @serialize map!(VkDisplayModeKHR, ref!DisplayModeObject)                 DisplayModes
+@handleMap @serialize map!(VkDebugReportCallbackEXT, ref!DebugReportCallbackObject) DebugReportCallbacks
+// Vulkan 1.1 core
+@handleMap @serialize map!(VkSamplerYcbcrConversion, ref!SamplerYcbcrConversionObject) SamplerYcbcrConversions
+@handleMap @serialize map!(VkDescriptorUpdateTemplate, ref!DescriptorUpdateTemplateObject) DescriptorUpdateTemplates
+// Other state Tracking
+@hidden @serialize map!(VkDevice, VkMemoryRequirements) TransferBufferMemoryRequirements
+@serialize @untracked ref!QueueObject                   LastBoundQueue
+@serialize @untrackedMap map!(VkQueue, ref!DrawInfo)    LastDrawInfos
+@serialize @untrackedMap map!(VkQueue, ref!ComputeInfo) LastComputeInfos
+@serialize @untracked PresentInfo                       LastPresentInfo
+@serialize LastSubmissionType                           LastSubmission
+@untrackedMap map!(VkQueue, ref!DynamicPipelineState)   LastDynamicPipelineStates
+@untrackedMap map!(VkQueue, ref!PushConstantInfo)       LastPushConstants
+
+@hidden bool IsRebuilding
+
+@internal class BoundDescriptorSetBufferInfo {
+  map!(u32, map!(u32, map!(VkDeviceSize, bool)))  bufferOffsets
+  bool shouldReadBuffers
+}
+
+sub ref!DrawInfo lastDrawInfo() {
+  if LastBoundQueue != null {
+    if !(LastBoundQueue.VulkanHandle in LastDrawInfos) {
+      LastDrawInfos[LastBoundQueue.VulkanHandle] = new!DrawInfo()
+    }
+  }
+
+  ldi := switch (LastBoundQueue == null) {
+    case false:
+      LastDrawInfos[LastBoundQueue.VulkanHandle]
+    case true:
+      new!DrawInfo()
+  }
+  return ldi
+}
+
+// Clear the recorded descriptor sets in the last draw
+sub void clearLastDrawInfoDescriptorSets() {
+  n := len(lastDrawInfo().DescriptorSets)
+  for i in (0 .. n) {
+    ldi := lastDrawInfo()
+    ldi.DescriptorSets[as!u32(i)] = null
+  }
+}
+
+// Clear the draw command parameters in the last draw info
+sub void clearLastDrawInfoDrawCommandParameters() {
+  ldi := lastDrawInfo()
+  ldi.CommandParameters.Draw = null
+  ldi.CommandParameters.DrawIndexed = null
+  ldi.CommandParameters.DrawIndirect = null
+  ldi.CommandParameters.DrawIndexedIndirect = null
+  ldi.CommandParameters.DrawIndirectCountKHR = null
+  ldi.CommandParameters.DrawIndexedIndirectCountKHR = null
+  ldi.CommandParameters.DrawIndirectCountAMD = null
+  ldi.CommandParameters.DrawIndexedIndirectCountAMD = null
+  ldi.CommandParameters.DrawIndirectByteCountEXT = null
+}
+
+sub ref!ComputeInfo lastComputeInfo() {
+  if LastBoundQueue != null {
+    if !(LastBoundQueue.VulkanHandle in LastComputeInfos) {
+      LastComputeInfos[LastBoundQueue.VulkanHandle] = new!ComputeInfo()
+    }
+  }
+
+  lci := switch (LastBoundQueue == null) {
+    case false:
+      LastComputeInfos[LastBoundQueue.VulkanHandle]
+    case true:
+      new!ComputeInfo()
+  }
+  return lci
+}
+
+sub void clearLastComputeInfoDispatchCommandParameters() {
+  lci := lastComputeInfo()
+  lci.CommandParameters.Dispatch = null
+  lci.CommandParameters.DispatchIndirect = null
+}
+
+sub ref!PushConstantInfo lastPushConstants() {
+  if LastBoundQueue != null {
+    if !(LastBoundQueue.VulkanHandle in LastPushConstants) {
+      dev := Devices[LastBoundQueue.Device]
+      physDev := PhysicalDevices[dev.PhysicalDevice]
+      LastPushConstants[LastBoundQueue.VulkanHandle] = new!PushConstantInfo(make!u8(physDev.PhysicalDeviceProperties.limits.maxPushConstantsSize))
+    }
+  }
+  return switch (LastBoundQueue == null) {
+    case false:
+      LastPushConstants[LastBoundQueue.VulkanHandle]
+    case true:
+      null
+  }
+}
+
+sub ref!DynamicPipelineState lastDynamicPipelineState() {
+  if LastBoundQueue != null {
+    if !(LastBoundQueue.VulkanHandle in LastDynamicPipelineStates) {
+      LastDynamicPipelineStates[LastBoundQueue.VulkanHandle] = new!DynamicPipelineState()
+    }
+  }
+
+  ldps := switch (LastBoundQueue == null) {
+    case false:
+      LastDynamicPipelineStates[LastBoundQueue.VulkanHandle]
+    case true:
+      new!DynamicPipelineState()
+  }
+  return ldps
+}

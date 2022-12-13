@@ -1,0 +1,639 @@
+// Copyright (C) 2017 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+import "core/image/image.proto";
+import "core/data/pod/pod.proto";
+import "gapis/service/box/box.proto";
+import "gapis/service/path/path.proto";
+import "gapis/vertex/vertex.proto";
+
+package api;
+option java_package = "com.google.gapid.proto.service.api";
+option java_outer_classname = "API";
+option go_package = "github.com/google/gapid/gapis/api";
+
+// Command describes the service representation for a single intercepted command
+// or sub-command.
+message Command {
+  // The function name.
+  string name = 1;
+  // The function's API.
+  path.API API = 2;
+  // The list of function parameters.
+  repeated Parameter parameters = 3;
+  // The function return value 'parameter'.
+  Parameter result = 4;
+  // The identifier of the thread that issued this command.
+  uint64 thread = 5;
+  // True if the command has terminated, i.e., has post-fence observations.
+  bool terminated = 6;
+}
+
+// Parameter is the service representation of a parameter of a command.
+message Parameter {
+  // The name of the parameter.
+  string name = 1;
+  // The value of the parameter.
+  box.Value value = 2;
+  // The possible alternative named values for the parameter.
+  path.ConstantSet constants = 3;
+  // The type of this parameter
+  path.Type type = 4;
+}
+
+// DrawPrimitive is an enumerator of primitive draw modes
+enum DrawPrimitive {
+  Points = 0;
+  Lines = 1;
+  LineStrip = 2;
+  LineLoop = 3;
+  Triangles = 4;
+  TriangleStrip = 5;
+  TriangleFan = 6;
+}
+
+// FramebufferAttachment values indicate the type of frame buffer attachment.
+enum FramebufferAttachmentType {
+  OutputColor = 0;
+  OutputDepth = 1;
+  InputColor = 2;
+  InputDepth = 3;
+}
+
+enum ShaderType {
+  Vertex = 0;
+  Geometry = 1;
+  TessControl = 2;
+  TessEvaluation = 3;
+  Fragment = 4;
+  Compute = 5;
+  Spirv = 6;
+  SpirvBinary = 7;
+}
+
+enum UniformFormat {
+  Scalar = 0;
+  Vec2 = 1;
+  Vec3 = 2;
+  Vec4 = 3;
+  Mat2 = 4;
+  Mat3 = 5;
+  Mat4 = 6;
+  Mat2x3 = 7;
+  Mat2x4 = 8;
+  Mat3x2 = 9;
+  Mat3x4 = 10;
+  Mat4x2 = 11;
+  Mat4x3 = 12;
+  Sampler = 13;
+}
+
+enum UniformType {
+  Int32 = 0;
+  Uint32 = 1;
+  Bool = 2;
+  Float = 3;
+  Double = 4;
+}
+
+// ResourceData represents the resource state at a single point in a capture
+message ResourceData {
+  oneof data {
+    Texture texture = 1;
+    Shader shader = 2;
+    Pipeline pipeline = 3;
+  }
+}
+
+// ResourceExtras represents extra resource state that may be too expensive to
+// pre-compute
+message ResourceExtras {
+  oneof data {
+    ShaderExtras shader_extras = 1;
+  }
+}
+
+// MultiResourceData represents the state  of resources at a single point in a
+// capture
+message MultiResourceData {
+  repeated ResourceData resources = 1;
+}
+
+// Texture represents a texture resource.
+message Texture {
+  oneof type {
+    Texture1D texture_1d = 1;
+    Texture1DArray texture_1d_array = 2;
+    Texture2D texture_2d = 3;
+    Texture2DArray texture_2d_array = 4;
+    Texture3D texture_3d = 5;
+    Cubemap cubemap = 6;
+    CubemapArray cubemap_array = 7;
+  }
+}
+
+// Shader represents a shader resource.
+message Shader {
+  ShaderType type = 1;
+  string source = 2;
+  string source_language = 3;
+  string spirv_source = 4;
+  bool cross_compiled = 5;
+}
+
+// Extra data for a shader resource.
+message ShaderExtras {
+  message StaticAnalysis {
+    uint32 alu_instructions = 1;
+    uint32 texture_instructions = 2;
+    uint32 branch_instructions = 3;
+    uint32 temp_registers = 4;
+  }
+  StaticAnalysis static_analysis = 1;
+}
+
+// Uniform respresents a uniform/active uniform resource.
+message Uniform {
+  uint32 uniform_location = 1;
+  string name = 2;
+  UniformFormat format = 3;
+  UniformType type = 4;
+  box.Value value = 5;
+}
+
+// IndexBuffer is a stream of vertex indices used to draw a model.
+message IndexBuffer {
+  repeated uint32 indices = 1;
+}
+
+// Mesh represents the geometry of a draw call.
+message Mesh {
+  DrawPrimitive draw_primitive = 1;
+  vertex.Buffer vertex_buffer = 2;
+  IndexBuffer index_buffer = 3;
+
+  message Stats {
+    uint32 vertices = 1;
+    uint32 indices = 2;
+    uint32 primitives = 3;
+  }
+  Stats stats = 4;
+}
+
+// Texture1D represents a one-dimensional texture resource.
+message Texture1D {
+  // The mip-map levels.
+  repeated image.Info levels = 1;
+}
+
+// Texture1DArray represents a one-dimensional texture array resource.
+message Texture1DArray {
+  repeated Texture1D layers = 1;
+}
+
+// Texture2D represents a two-dimensional texture resource.
+message Texture2D {
+  // The mip-map levels.
+  repeated image.Info levels = 1;
+  bool multisampled = 2;
+}
+
+// Texture2DArray represents a two-dimensional texture array resource.
+message Texture2DArray {
+  repeated Texture2D layers = 1;
+  bool multisampled = 2;
+}
+
+// Texture3D represents a three-dimensional texture resource.
+message Texture3D {
+  // The mip-map levels.
+  repeated image.Info levels = 1;
+}
+
+// Cubemap represents a cube-map texture resource.
+message Cubemap {
+  // The mip-map levels.
+  repeated CubemapLevel levels = 1;
+}
+
+// CubemapArray represents a cube-map texture array resource.
+message CubemapArray {
+  repeated Cubemap layers = 1;
+}
+
+// Pipeline represents a graphics pipeline resource.
+message Pipeline {
+  // The API ID used for this pipeline belongs to.
+  path.API API = 1;
+  // PipelineType is the possible types for a pipeline.
+  enum Type {
+    GRAPHICS = 0;
+    COMPUTE = 1;
+  }
+  // Whether this pipeline is a graphics or compute pipeline
+  Type pipeline_type = 2;
+  string debug_name = 3;
+  // The bound programmable stages of the pipeline.
+  repeated Stage stages = 4;
+  // Whether this pipeline is currently bound
+  bool bound = 5;
+}
+
+// Stage represents a single stage in a pipeline.
+message Stage {
+  string stage_name = 1;
+  string debug_name = 2;
+  bool enabled = 3;
+  repeated DataGroup groups = 4;
+}
+
+message DataGroup {
+  string group_name = 1;
+  oneof data {
+    KeyValuePairList key_values = 2;
+    Table table = 3;
+    Shader shader = 4;
+  }
+  // If data is a Shader, this is the path to the shader's data.
+  path.ResourceData resource = 5;
+}
+
+message DataValue {
+  string type_name = 1;
+  oneof val {
+    pod.Value value = 2;
+    HandleValue handleVal = 7;
+    EnumValue enumVal = 3;
+    BitfieldValue bitfield = 4;
+    LinkedValue link = 5;
+  }
+
+  // An optional debug label for this value.
+  string label = 6;
+}
+
+message HandleValue {
+  uint64 value = 1;
+}
+
+message EnumValue {
+  uint64 value = 1;
+  string string_value = 2;
+  string display_value = 3;
+}
+
+message BitfieldValue {
+  repeated uint64 set_bits = 1;
+  repeated string set_bitnames = 2;
+  repeated string set_display_names = 3;
+  bool combined = 4;
+}
+
+message LinkedValue {
+  repeated path.Any link = 1;
+  DataValue display_val = 2;
+}
+
+message KeyValuePairList {
+  repeated KeyValuePair key_values = 1;
+}
+
+message KeyValuePair {
+  string name = 1;
+  DataValue value = 2;
+  bool dynamic = 3;
+  string dependee = 4;
+  bool active = 5;
+}
+
+message Table {
+  repeated string headers = 1;
+  repeated Row rows = 2;
+  bool dynamic = 3;
+  string dependee = 4;
+  bool active = 5;
+}
+
+message Row {
+  repeated DataValue row_values = 1;
+}
+
+// DescriptorBinding represents one descriptor binding in a pipeline.
+message DescriptorBinding {
+  uint32 set = 1;
+  uint32 binding = 2;
+  // The type of this binding.  If names are available corresponding to these
+  // types, the index for ConstantSet will be provided as
+  // `Pipeline.binding_type_constants_index`.
+  uint32 type = 3;
+  // The stage's whose shaders access this binding
+  repeated uint32 stage_idxs = 4;
+  // The value(s) bound to this binding.
+  // There will be multiple values if this binding is an array.
+  repeated BindingValue values = 5;
+}
+
+// BindingValue represents the value bound to a given descriptor binding in a
+// pipeline.
+message BindingValue {
+  oneof val {
+    Unbound unbound = 1;
+    ImageInfo image_info = 2;
+    BufferInfo buffer_info = 3;
+    uint64 texel_buffer_view = 4;
+  }
+}
+
+// Unbound is a placeholder value to represent unbound descriptor set value.
+message Unbound {}
+
+// ImageInfo is a image value bound to a descriptor binding.
+message ImageInfo {
+  uint64 sampler = 1;
+  uint64 image_view = 2;
+  uint32 image_layout = 3;
+}
+
+// BufferInfo is a buffer value bound to a descriptor binding.
+message BufferInfo {
+  uint64 buffer = 1;
+  uint64 offset = 2;
+  uint64 range = 3;
+}
+
+// CubemapLevel represents a single mip-map level of a cube-map texture
+// resource.
+//
+//         .........
+//       .  +y   . :
+//     .........   :
+//     :       :+x :
+//     :  +z   : .
+//     :.......:
+//
+message CubemapLevel {
+  image.Info negative_x = 1;
+  image.Info positive_x = 2;
+  image.Info negative_y = 3;
+  image.Info positive_y = 4;
+  image.Info negative_z = 5;
+  image.Info positive_z = 6;
+}
+
+// Metrics about the state at some point in a trace
+message Metrics {
+  // The brekadown of memory allocations and bindings.
+  MemoryBreakdown memory_breakdown = 1;
+}
+
+// The description of the memory layout of the API state
+message MemoryBreakdown {
+  // The API ID used for this call.
+  path.API API = 1;
+  // The memory allocations that are currently in use.
+  repeated MemoryAllocation allocations = 2;
+  // The index to get the constants names for `MemoryAllocation.flags`, to be
+  // fetched with the path.ConstantSet endpoint.  A value of -1 indicates no
+  // flag names should be fetched.
+  int32 allocation_flags_index = 3;
+}
+
+// A single memory allocation
+message MemoryAllocation {
+  // The device this allocation was made on
+  uint64 device = 1;
+  // The memory type this allocation is from
+  uint32 memory_type = 2;
+  // Flags describing properties of the allocation, e.g. whether it's device
+  // local, whether it's host visible, etc.  The names for the flags can be
+  // fetched from path.ConstantSet with the index in
+  // `MemoryBreakdown.allocation_flags_index`.
+  uint32 flags = 3;
+  // The API specific ID for this allocation
+  uint64 handle = 4;
+  // The user-readable name for this allocation
+  string name = 5;
+  // This size of the memory allocated
+  uint64 size = 6;
+  // The regions of host memory this allocation has been mapped into
+  MemoryMapping mapping = 7;
+  // All buffers/images bound to this memory allocation
+  repeated MemoryBinding bindings = 8;
+}
+
+// A mapping from part of a memory allocation into host memory
+message MemoryMapping {
+  // The size in bytes of the mapping
+  uint64 size = 1;
+  // The offset of the mapping into the source allocation, in bytes
+  uint64 offset = 2;
+  // The address on the host that this memory is bound to
+  uint64 mapped_address = 3;
+}
+
+// A buffer/image that is bound to part of a memory allocation
+message MemoryBinding {
+  // The API specific id for this object
+  uint64 handle = 1;
+  // The user-readable name for this binding
+  string name = 2;
+
+  // The size of the binding, in bytes
+  uint64 size = 3;
+  // The offset into the bound allocation, in bytes
+  uint64 offset = 4;
+
+  // Which type of object is using this memory, and any extra associated data
+  // with that.
+  oneof type {
+    NormalBinding buffer = 5;
+    NormalBinding image = 6;
+    SparseImageBlock sparse_image_block = 7;
+    SparseImageMetadataMipTail sparse_image_metadata = 8;
+    SparseImageMetadataMipTail sparse_image_mip_tail = 9;
+    SparseBinding sparse_opaque_image_block = 10;
+    SparseBinding sparse_buffer_block = 11;
+  }
+}
+
+// A normal full binding of a resource to a memory object.
+// No additional information is needed.
+message NormalBinding {}
+
+enum AspectType {
+  COLOR = 0;
+  DEPTH = 1;
+  STENCIL = 2;
+}
+
+// A block of a sparse image with texel information
+message SparseImageBlock {
+  // The offset into the image in the x-dimension
+  int32 x_offset = 1;
+  // The offset into the image in the y-dimension
+  int32 y_offset = 2;
+  // The width of the bound block
+  uint32 width = 3;
+  // The height of the bound block
+  uint32 height = 4;
+
+  // The mip level of the bound block
+  uint32 mip_level = 5;
+  // The array layer the bound block is in
+  uint32 array_layer = 6;
+
+  // The aspect(s) of the image this block is from (colour, depth, etc.)
+  repeated AspectType aspects = 7;
+}
+
+// A range of memory in an image that's in the mip tail
+message SparseImageMetadataMipTail {
+  // The array layer the metadata/mip tail is from
+  uint32 array_layer = 1;
+
+  // The offset into the metadata/mip tail block of the binding
+  uint64 offset = 2;
+
+  // The aspect(s) of the image this block is from (colour, depth, etc.)
+  repeated AspectType aspects = 3;
+}
+
+// A regular sparse binding into a resource
+message SparseBinding {
+  // The offset into the buffer of the binding
+  uint64 offset = 1;
+}
+
+// Framegraph
+
+message FramegraphBuffer {
+  uint64 handle = 1;
+  uint64 size = 2;
+  uint32 usage = 3;
+  bool transferSrc = 4;
+  bool transferDst = 5;
+  bool uniformTexel = 6;
+  bool storageTexel = 7;
+  bool uniform = 8;
+  bool storage = 9;
+  bool index = 10;
+  bool vertex = 11;
+  bool indirect = 12;
+  // coherentMemory is true if any of the backing memory is coherent
+  bool coherentMemory = 13;
+  // memoryMapped is true if any of the backing memory is mapped when
+  // the buffer is used
+  bool memoryMapped = 14;
+}
+
+message FramegraphImage {
+  uint64 handle = 1;
+  // We reuse image.Info here, but note that its Info.bytes field won't be set.
+  image.Info info = 2;
+  string imageType = 3;
+  uint32 usage = 4;
+  bool transferSrc = 5;
+  bool transferDst = 6;
+  bool sampled = 7;
+  bool storage = 8;
+  bool colorAttachment = 9;
+  bool depthStencilAttachment = 10;
+  bool transientAttachment = 11;
+  bool inputAttachment = 12;
+  bool swapchain = 13;
+  // coherentMemory is true if any of the backing memory is coherent
+  bool coherentMemory = 14;
+  // memoryMapped is true if any of the backing memory is mapped when
+  // the image is used
+  bool memoryMapped = 15;
+}
+
+enum LoadStoreOp {
+  DISCARD = 0;  // Used for Vulkan DONT_CARE
+  CLEAR = 1;
+  LOAD = 2;
+  STORE = 3;
+}
+
+message FramegraphAttachment {
+  LoadStoreOp loadOp = 1;
+  LoadStoreOp storeOp = 2;
+  uint64 imageViewHandle = 3;
+  FramegraphImage image = 4;
+}
+
+message FramegraphSubpass {
+  repeated FramegraphAttachment input = 1;
+  repeated FramegraphAttachment color = 2;
+  repeated FramegraphAttachment resolve = 3;
+  FramegraphAttachment depthStencil = 4;
+}
+
+message FramegraphBufferAccess {
+  bool read = 1;
+  bool write = 2;
+  FramegraphBuffer buffer = 3;
+}
+
+message FramegraphImageAccess {
+  bool read = 1;
+  bool write = 2;
+  FramegraphImage image = 3;
+}
+
+message FramegraphRenderpass {
+  uint64 handle = 1;
+  repeated uint64 beginSubCmdIdx = 2;
+  repeated uint64 endSubCmdIdx = 3;
+  repeated FramegraphSubpass subpass = 4;
+  uint32 framebufferWidth = 5;
+  uint32 framebufferHeight = 6;
+  uint32 framebufferLayers = 7;
+  repeated FramegraphImageAccess imageAccess = 8;
+  repeated FramegraphBufferAccess bufferAccess = 9;
+}
+
+message FramegraphCompute {
+  repeated uint64 subCmdIdx = 1;
+  uint64 pipelineHandle = 2;
+  repeated FramegraphImageAccess imageAccess = 3;
+  repeated FramegraphBufferAccess bufferAccess = 4;
+  uint32 baseGroupX = 5;
+  uint32 baseGroupY = 6;
+  uint32 baseGroupZ = 7;
+  uint32 groupCountX = 8;
+  uint32 groupCountY = 9;
+  uint32 groupCountZ = 10;
+  bool indirect = 11;
+}
+
+message FramegraphNode {
+  uint64 id = 1;
+  oneof workload {
+    FramegraphRenderpass renderpass = 2;
+    FramegraphCompute compute = 3;
+  }
+}
+
+message FramegraphEdge {
+  uint64 origin = 1;
+  uint64 destination = 2;
+}
+
+message Framegraph {
+  repeated FramegraphNode nodes = 1;
+  repeated FramegraphEdge edges = 2;
+}

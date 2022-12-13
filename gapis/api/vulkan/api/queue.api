@@ -1,0 +1,398 @@
+// Copyright (C) 2018 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Based off of the original vulkan.h header file which has the following
+// license.
+
+// Copyright (c) 2015 The Khronos Group Inc.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and/or associated documentation files (the
+// "Materials"), to deal in the Materials without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Materials, and to
+// permit persons to whom the Materials are furnished to do so, subject to
+// the following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Materials.
+//
+// THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+// MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+
+///////////
+// Queue //
+///////////
+
+@internal class QueueObject {
+  @unused VkDevice                                               Device
+  @unused u32                                                    Family
+  @unused u32                                                    Index
+  @unused VkDeviceQueueCreateFlags                               Flags
+  @unused VkQueue                                                VulkanHandle
+  map!(VkEvent, ref!EventObject)                                 PendingEvents
+  map!(VkSemaphore, ref!SemaphoreObject)                         PendingSemaphores
+  @unused ref!VulkanDebugMarkerInfo                              DebugInfo
+  @untracked @untrackedMap map!(VkBuffer, bool) ReadCoherentBuffers
+  @unused u32                                                    DeviceMask
+}
+
+@internal class Submission {
+  map!(u32, VkCommandBuffer) CommandBuffers
+  map!(u32, VkSemaphore) WaitSemaphores
+  map!(u32, VkSemaphore) SignalSemaphores
+  ref!QueuedSparseBinds  SparseBinds
+}
+
+@indirect("VkDevice")
+cmd void vkGetDeviceQueue(
+    VkDevice device,
+    u32      queueFamilyIndex,
+    u32      queueIndex,
+    VkQueue* pQueue) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  id := ?
+  if !(id in Queues) {
+    Queues[id] = new!QueueObject(
+      Device: device,
+      Family:  queueFamilyIndex,
+      Index:  queueIndex,
+      VulkanHandle:  id)
+    dev := Devices[device]
+    dev.QueueObjects[len(dev.QueueObjects)] = Queues[id]
+    _ = PhysicalDevices[dev.PhysicalDevice].QueueFamilyProperties[queueFamilyIndex]
+  }
+  if pQueue == null { vkErrorNullPointer("VkQueue") }
+  pQueue[0] = id
+}
+
+@since("1.1")
+@indirect("VkDevice")
+cmd void vkGetDeviceQueue2(
+    VkDevice                  device,
+    const VkDeviceQueueInfo2* pQueueInfo,
+    VkQueue*                  pQueue) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  info := pQueueInfo[0]
+  id := ?
+  if !(id in Queues) {
+    Queues[id] = new!QueueObject(
+      Device: device,
+      Family: info.queueFamilyIndex,
+      Index:  info.queueIndex,
+      Flags:  info.flags,
+      VulkanHandle:  id)
+    dev := Devices[device]
+    dev.QueueObjects[len(dev.QueueObjects)] = Queues[id]
+    _ = PhysicalDevices[dev.PhysicalDevice].QueueFamilyProperties[info.queueFamilyIndex]
+  }
+  if pQueue == null { vkErrorNullPointer("VkQueue") }
+  pQueue[0] = id
+}
+
+@indirect("VkQueue", "VkDevice")
+@submission
+cmd VkResult vkQueueSubmit(
+    VkQueue             queue,
+    u32                 submitCount,
+    const VkSubmitInfo* pSubmits,
+    VkFence             fence) {
+  if !(queue in Queues) { vkErrorInvalidQueue(queue) }
+  LastSubmission = SUBMIT
+  submitInfo := pSubmits[0:submitCount]
+  LastBoundQueue = Queues[queue]
+  clear(LastBoundQueue.ReadCoherentBuffers)
+  enterSubcontext()
+  for i in (0 .. submitCount) {
+    info := submitInfo[i]
+
+    // handle pNext
+    if info.pNext != null {
+      numPNext := numberOfPNext(info.pNext)
+      next := MutableVoidPtr(as!void*(info.pNext))
+      for i in (0 .. numPNext) {
+        sType := as!const VkStructureType*(next.Ptr)[0]
+        switch sType {
+          case VK_STRUCTURE_TYPE_DEVICE_GROUP_SUBMIT_INFO: {
+            ext := as!VkDeviceGroupSubmitInfo*(next.Ptr)[0]
+            waitsemaphoreindices := ext.pWaitSemaphoreDeviceIndices[0:ext.waitSemaphoreCount]
+            for j in (0 .. ext.waitSemaphoreCount) {
+              if waitsemaphoreindices[j] != 0 {
+                vkErrUnsupported("Multiple devices in a group not supported yet")
+              }
+            }
+            cbmasks := ext.pCommandBufferDeviceMasks[0:ext.commandBufferCount]
+            for j in (0 .. ext.commandBufferCount) {
+              if cbmasks[j] > 1 {
+                vkErrUnsupported("Multiple devices in a group are not yet supported")
+              }
+            }
+            signalsemaphoreindices := ext.pSignalSemaphoreDeviceIndices[0:ext.signalSemaphoreCount]
+            for j in (0 .. ext.signalSemaphoreCount) {
+              if signalsemaphoreindices[j] != 0 {
+                vkErrUnsupported("Multiple devices in a group not supported yet")
+              }
+            }
+          }
+        }
+        next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+      }
+    }
+    subm := Submission()
+
+    wait_semaphores := info.pWaitSemaphores[0:info.waitSemaphoreCount]
+    wait_semaphores_all_valid := MutableBool(true)
+    for j in (0 .. info.waitSemaphoreCount) {
+      if wait_semaphores_all_valid.b {
+        ws := wait_semaphores[j]
+        if !(ws in Semaphores) {
+          wait_semaphores_all_valid.b = false
+          vkErrorInvalidSemaphore(ws)
+        } else {
+          subm.WaitSemaphores[len(subm.WaitSemaphores)] = ws
+        }
+      }
+    }
+
+    signal_semaphores := info.pSignalSemaphores[0:info.signalSemaphoreCount]
+    signal_semaphores_all_valid := MutableBool(true)
+    for j in (0 .. info.signalSemaphoreCount) {
+      if signal_semaphores_all_valid.b {
+        ws := signal_semaphores[j]
+        if !(ws in Semaphores) {
+          signal_semaphores_all_valid.b = false
+          vkErrorInvalidSemaphore(ws)
+        } else {
+          subm.SignalSemaphores[len(subm.SignalSemaphores)] = ws
+        }
+      }
+    }
+
+    read(info.pWaitDstStageMask[0:info.waitSemaphoreCount])
+
+    command_buffers := info.pCommandBuffers[0:info.commandBufferCount]
+    command_buffers_all_valid := MutableBool(true)
+    for j in (0 .. info.commandBufferCount) {
+      if command_buffers_all_valid.b {
+        cb := command_buffers[j]
+        if !(cb in CommandBuffers) {
+          command_buffers_all_valid.b = false
+          vkErrorInvalidCommandBuffer(cb)
+        } else {
+          subm.CommandBuffers[len(subm.CommandBuffers)] = cb
+        }
+      }
+    }
+
+    executeSubmit(queue, subm)
+    nextSubcontext()
+  }
+  leaveSubcontext()
+  fence // 'fence' keyword, marking the point where observed memory writes become visible
+
+  if fence != as!VkFence(0) {
+    fenceObj := Fences[fence]
+    fenceObj.Signaled = true
+    recordFenceSignal(fence)
+  }
+  return ?
+}
+
+
+@indirect("VkQueue", "VkDevice")
+@threadsafe
+@alive
+cmd VkResult vkQueueWaitIdle(
+    VkQueue queue) {
+  if !(queue in Queues) { vkErrorInvalidQueue(queue) }
+  return ?
+}
+
+sub void addSparseImageMemoryBinding(VkImage image, VkSparseImageMemoryBind bind) {
+  img := Images[image]
+  aspect := as!VkImageAspectFlagBits(bind.subresource.aspectMask)
+  if !(aspect in img.SparseImageMemoryBindings) {
+    img.SparseImageMemoryBindings[aspect] = new!SparseBoundImageAspectInfo()
+  }
+  aspectInfo := img.SparseImageMemoryBindings[aspect]
+  layer := bind.subresource.arrayLayer
+  if !(layer in aspectInfo.Layers) {
+    aspectInfo.Layers[layer] = new!SparseBoundImageLayerInfo()
+  }
+  layerInfo := aspectInfo.Layers[layer]
+  level := bind.subresource.mipLevel
+  if !(level in layerInfo.Levels) {
+    layerInfo.Levels[level] = new!SparseBoundImageLevelInfo()
+  }
+  levelInfo := layerInfo.Levels[level]
+
+  // TODO: Handle multi-planar images
+  blockSize := getImagePlaneMemoryInfo(img, as!VkImageAspectFlagBits(0)).MemoryRequirements.alignment
+  if (aspect in img.SparseMemoryRequirements) {
+    gran := img.SparseMemoryRequirements[aspect].formatProperties.imageGranularity
+    mipWidth := getMipSize(img.Info.Extent.width, level)
+    mipHeight := getMipSize(img.Info.Extent.height, level)
+    widthInBlocks := roundUpTo(mipWidth, gran.width)
+    heightInBlocks := roundUpTo(mipHeight, gran.height)
+
+    xe := roundUpTo(bind.extent.width, gran.width)
+    ye := roundUpTo(bind.extent.height, gran.height)
+    ze := roundUpTo(bind.extent.depth, gran.depth)
+    for zi in (0 .. ze) {
+      for yi in (0 .. ye) {
+        for xi in (0 .. xe) {
+          loc := xi + yi * widthInBlocks + zi * widthInBlocks * heightInBlocks
+          offset := VkOffset3D(
+            x:  bind.offset.x + as!s32(xi * gran.width),
+            y:  bind.offset.y + as!s32(yi * gran.height),
+            z:  bind.offset.z + as!s32(zi * gran.depth),
+          )
+          memOffset := as!u64(bind.memoryOffset + as!VkDeviceSize(loc) * blockSize)
+          levelInfo.Blocks[memOffset] = new!SparseBoundImageBlockInfo(
+            Offset:        offset,
+            Extent:        gran,
+            Memory:        bind.memory,
+            MemoryOffset:  as!VkDeviceSize(memOffset),
+            Size:          blockSize,
+            Flags:         bind.flags,
+          )
+        }
+      }
+    }
+  }
+}
+
+@indirect("VkQueue", "VkDevice")
+cmd VkResult vkQueueBindSparse(
+    VkQueue                 queue,
+    u32                     bindInfoCount,
+    const VkBindSparseInfo* pBindInfo,
+    VkFence                 fence) {
+  if !(queue in Queues) { vkErrorInvalidQueue(queue) }
+  LastBoundQueue = Queues[queue]
+  infos := pBindInfo[0:bindInfoCount]
+  enterSubcontext()
+  for i in (0 .. bindInfoCount) {
+    info := infos[i]
+    // handle pNext
+    if info.pNext != null {
+      numPNext := numberOfPNext(info.pNext)
+      next := MutableVoidPtr(as!void*(info.pNext))
+      for i in (0 .. numPNext) {
+        sType := as!const VkStructureType*(next.Ptr)[0]
+        switch sType {
+          case VK_STRUCTURE_TYPE_DEVICE_GROUP_BIND_SPARSE_INFO: {
+            _ = as!VkDeviceGroupBindSparseInfo*(next.Ptr)[0]
+          }
+        }
+        next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+      }
+    }
+
+    subm := Submission()
+    wait_semaphores := info.pWaitSemaphores[0:info.waitSemaphoreCount]
+    wait_semaphores_all_valid := MutableBool(true)
+    for j in (0 .. info.waitSemaphoreCount) {
+      if wait_semaphores_all_valid.b {
+        ws := wait_semaphores[j]
+        if !(ws in Semaphores) {
+          wait_semaphores_all_valid.b = false
+          vkErrorInvalidSemaphore(ws)
+        } else {
+          subm.WaitSemaphores[len(subm.WaitSemaphores)] = ws
+        }
+      }
+    }
+
+    signal_semaphores := info.pSignalSemaphores[0:info.signalSemaphoreCount]
+    signal_semaphores_all_valid := MutableBool(true)
+    for j in (0 .. info.signalSemaphoreCount) {
+      if signal_semaphores_all_valid.b {
+        ws := signal_semaphores[j]
+        if !(ws in Semaphores) {
+          signal_semaphores_all_valid.b = false
+          vkErrorInvalidSemaphore(ws)
+        } else {
+          subm.SignalSemaphores[len(subm.SignalSemaphores)] = ws
+        }
+      }
+    }
+    clear(LastBoundQueue.ReadCoherentBuffers)
+    queuedBinds := new!QueuedSparseBinds()
+
+    bufferBinds := info.pBufferBinds[0:info.bufferBindCount]
+    for j in (0 .. info.bufferBindCount) {
+      bufferBindInfo := bufferBinds[j]
+      if !(bufferBindInfo.buffer in Buffers) { vkErrorInvalidBuffer(bufferBindInfo.buffer) }
+      bindsToQueue := new!SparseMemoryBinds()
+      memoryBinds := bufferBindInfo.pBinds[0:bufferBindInfo.bindCount]
+      for k in (0 .. bufferBindInfo.bindCount) {
+        if (memoryBinds[k].memory != as!VkDeviceMemory(0)) &&
+            !(memoryBinds[k].memory in DeviceMemories) {
+          vkErrorInvalidDeviceMemory(memoryBinds[k].memory)
+        }
+        bindsToQueue.SparseMemoryBinds[k] = memoryBinds[k]
+      }
+      queuedBinds.BufferBinds[bufferBindInfo.buffer] = bindsToQueue
+    }
+
+    opaqueBinds := info.pImageOpaqueBinds[0:info.imageOpaqueBindCount]
+    for j in (0 .. info.imageOpaqueBindCount) {
+      opaqueBindInfo := opaqueBinds[j]
+      if !(opaqueBindInfo.image in Images) { vkErrorInvalidImage(opaqueBindInfo.image) }
+      bindsToQueue := new!SparseMemoryBinds()
+      memoryBinds := opaqueBindInfo.pBinds[0:opaqueBindInfo.bindCount]
+      for k in (0 .. opaqueBindInfo.bindCount) {
+        if (memoryBinds[k].memory != as!VkDeviceMemory(0)) &&
+            !(memoryBinds[k].memory in DeviceMemories) {
+          vkErrorInvalidDeviceMemory(memoryBinds[k].memory)
+        }
+        bindsToQueue.SparseMemoryBinds[k] = memoryBinds[k]
+      }
+      queuedBinds.OpaqueImageBinds[opaqueBindInfo.image] = bindsToQueue
+    }
+
+    imageBinds := info.pImageBinds[0:info.imageBindCount]
+    for j in (0 .. info.imageBindCount) {
+      imageBindInfo := imageBinds[j]
+      if !(imageBindInfo.image in Images) { vkErrorInvalidImage(imageBindInfo.image) }
+      bindsToQueue := new!SparseImageMemoryBinds()
+      imageMemoryBinds := imageBindInfo.pBinds[0:imageBindInfo.bindCount]
+      for k in (0 .. imageBindInfo.bindCount) {
+        if (imageMemoryBinds[k].memory != as!VkDeviceMemory(0)) &&
+              !(imageMemoryBinds[k].memory in DeviceMemories) {
+            vkErrorInvalidDeviceMemory(imageMemoryBinds[k].memory)
+        }
+        bindsToQueue.SparseImageMemoryBinds[k] = imageMemoryBinds[k]
+      }
+      queuedBinds.ImageBinds[imageBindInfo.image] = bindsToQueue
+    }
+    subm.SparseBinds = queuedBinds
+    executeSubmit(queue, subm)
+  }
+
+  fence
+  if fence != as!VkFence(0) {
+    fenceObj := Fences[fence]
+    fenceObj.Signaled = true
+    recordFenceSignal(fence)
+  }
+
+  return ?
+}

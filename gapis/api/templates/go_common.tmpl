@@ -1,0 +1,863 @@
+{{/*
+ * Copyright (C) 2017 Google Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */}}
+
+{{Include "common.tmpl"}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the go type for the provided AST type or expression.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.Type"}}
+  {{if not (IsType $)}}{{Template "Go.Type" (TypeOf $)}}
+  {{else if IsAny           $}}interface{}
+  {{else if IsPseudonym     $}}{{Template "Go.TypeName" $}}
+  {{else if IsStaticArray   $}}{{Template "Go.TypeName" $}}
+  {{else if IsMap           $}}{{Template "Go.TypeName" $}}
+  {{else if IsClass         $}}{{Template "Go.TypeName" $}}
+  {{else if IsEnum          $}}{{Template "Go.TypeName" $}}
+  {{else if IsPointer       $}}{{Template "Go.TypeName" $}}
+  {{else if IsSlice         $}}{{Template "Go.TypeName" $}}
+  {{else if IsReference     $}}{{Template "Go.TypeName" $}}
+  {{else if IsBool          $}}bool
+  {{else if IsInt           $}}ϟmem.Int
+  {{else if IsUint          $}}ϟmem.Uint
+  {{else if IsSize          $}}ϟmem.Size
+  {{else if IsChar          $}}ϟmem.Char
+  {{else if IsU8            $}}uint8
+  {{else if IsS8            $}}int8
+  {{else if IsU16           $}}uint16
+  {{else if IsS16           $}}int16
+  {{else if IsF32           $}}float32
+  {{else if IsU32           $}}uint32
+  {{else if IsS32           $}}int32
+  {{else if IsF64           $}}float64
+  {{else if IsU64           $}}uint64
+  {{else if IsS64           $}}int64
+  {{else if IsString        $}}string
+  {{else if IsMessage       $}}*stringtable.Msg
+  {{else if IsVoid          $}}void
+  {{else}}{{Error "macro Go.Type called with unsupported type: %s" $.Name}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits a typename for the given type.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.TypeName"}}
+  {{if not (IsType $)}}{{Template "Go.TypeName" (TypeOf $)}}
+  {{else if IsPseudonym     $}}{{$.Name | GoPublicName}}
+  {{else if IsStaticArray   $}}{{$.Name | GoPublicName}}
+  {{else if IsMap           $}}{{$.Name | GoPublicName}}
+  {{else if IsClass         $}}{{$.Name | GoPublicName}}
+  {{else if IsEnum          $}}{{$.Name | GoPublicName}}
+  {{else if IsPointer       $}}{{$.Name | GoPublicName}}
+  {{else if IsSlice         $}}{{$.Name | GoPublicName}}
+  {{else if IsReference     $}}{{$.Name | GoPublicName}}
+  {{else}}{{Error "macro Go.TypeName called with unsupported type: %s" $.Name}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the go default value for the provided AST type.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.Null"}}
+  {{AssertType $ "Type"}}
+  {{     if IsPointer       $}}{{Template "Go.Type" $}}(0)
+  {{else if IsSlice         $}}{{Template "Go.Type" $}}{}
+  {{else if IsReference     $}}Nil{{Template "Go.Type" $}}
+  {{else if IsMap           $}}New{{Template "Go.Type" $}}()
+  {{else if IsClass         $}}Make{{Template "Go.Type" $}}()
+  {{else if IsStaticArray   $}}New{{Template "Go.Type" $}}()
+  {{else if IsBool          $}}false
+  {{else if IsChar          $}}ϟmem.Char(0)
+  {{else if IsInt           $}}ϟmem.Int(0)
+  {{else if IsUint          $}}ϟmem.Uint(0)
+  {{else if IsSize          $}}ϟmem.Size(0)
+  {{else if IsS8            $}}int8(0)
+  {{else if IsU8            $}}uint8(0)
+  {{else if IsS16           $}}int16(0)
+  {{else if IsU16           $}}uint16(0)
+  {{else if IsS32           $}}int32(0)
+  {{else if IsU32           $}}uint32(0)
+  {{else if IsF32           $}}float32(0)
+  {{else if IsS64           $}}int64(0)
+  {{else if IsU64           $}}uint64(0)
+  {{else if IsF64           $}}float64(0)
+  {{else if IsEnum          $}}{{$.Name}}(0)
+  {{else if IsString        $}}""
+  {{else if IsPseudonym     $}}
+    {{$u := $ | Underlying}}
+    {{if IsStaticArray $u}}New{{Template "Go.Type" $}}()
+    {{else               }}{{Template "Go.Type" $}}({{Template "Go.Null" $.To}})
+    {{end}}
+  {{else}}{{Error "macro Go.Null called with unsupported type: %s (%T)" $.Name $}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the logic to encode the specified value to the encoder ϟe.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.Encode"}}
+  {{AssertType $.Type "Type"}}
+
+  {{     if IsPseudonym   $.Type}}{{Template "Go.Encode" "Type" $.Type.To "Value" (print (Macro "Go.Type" $.Type.To) "(" $.Value ")")}}
+  {{else if IsVoid        $.Type}}ϟe.I8({{$.Value}})
+  {{else if IsBool        $.Type}}ϟe.Bool({{$.Value}})
+  {{else if IsChar        $.Type}}ϟe.Char({{$.Value}})
+  {{else if IsU8          $.Type}}ϟe.U8({{$.Value}})
+  {{else if IsS8          $.Type}}ϟe.I8({{$.Value}})
+  {{else if IsU16         $.Type}}ϟe.U16({{$.Value}})
+  {{else if IsS16         $.Type}}ϟe.I16({{$.Value}})
+  {{else if IsF32         $.Type}}ϟe.F32({{$.Value}})
+  {{else if IsU32         $.Type}}ϟe.U32({{$.Value}})
+  {{else if IsS32         $.Type}}ϟe.I32({{$.Value}})
+  {{else if IsF64         $.Type}}ϟe.F64({{$.Value}})
+  {{else if IsU64         $.Type}}ϟe.U64({{$.Value}})
+  {{else if IsS64         $.Type}}ϟe.I64({{$.Value}})
+  {{else if IsEnum        $.Type}}{{Template "Go.Encode" "Type" $.Type.NumberType "Value" (print (Macro "Go.Type" $.Type.NumberType) "(" $.Value ")")}}
+  {{else if IsString      $.Type}}ϟe.String({{$.Value}})
+  {{else if IsPointer     $.Type}}ϟe.Pointer({{$.Value}}.Address())
+  {{else if IsInt         $.Type}}ϟe.Int({{$.Value}})
+  {{else if IsUint        $.Type}}ϟe.Uint({{$.Value}})
+  {{else if IsSize        $.Type}}ϟe.Size({{$.Value}})
+  {{else if IsStaticArray $.Type}}{{$.Value}}.Encode(ϟe)
+  {{else if IsClass       $.Type}}{{$.Value}}.Encode(ϟe)
+  {{else                        }}{{Error "macro Go.Encode called with unsupported type: %v" $.Type}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the logic to decode the specified type from the decoder ϟd.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.Decode"}}
+  {{AssertType $ "Type"}}
+
+  {{     if IsStaticArray $}}Decode{{Macro "Go.Type" $ | Title}}(ϟd)
+  {{else if IsPseudonym   $}}{{Template "Go.Type" $}}({{Template "Go.Decode" ($ | Underlying)}})
+  {{else if IsEnum        $}}Decode{{Macro "Go.Type" $ | Title}}(ϟd)
+  {{else if IsClass       $}}Decode{{Macro "Go.Type" $ | Title}}(ϟd)
+  {{else if IsBool        $}}ϟd.Bool()
+  {{else if IsU8          $}}ϟd.U8()
+  {{else if IsS8          $}}ϟd.I8()
+  {{else if IsU16         $}}ϟd.U16()
+  {{else if IsS16         $}}ϟd.I16()
+  {{else if IsF32         $}}ϟd.F32()
+  {{else if IsU32         $}}ϟd.U32()
+  {{else if IsS32         $}}ϟd.I32()
+  {{else if IsF64         $}}ϟd.F64()
+  {{else if IsU64         $}}ϟd.U64()
+  {{else if IsS64         $}}ϟd.I64()
+  {{else if IsString      $}}ϟd.String()
+  {{else if IsPointer     $}}{{Template "Go.Type" $}}(ϟd.Pointer())
+  {{else if IsChar        $}}ϟd.Char()
+  {{else if IsInt         $}}ϟd.Int()
+  {{else if IsUint        $}}ϟd.Uint()
+  {{else if IsSize        $}}ϟd.Size()
+  {{else}}{{Error "macro Go.Decode called with unsupported type: %v" $}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the size in bytes of the specified type as a uint64
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.SizeOf"}}
+  {{AssertType $ "Type"}}
+
+  {{     if IsPseudonym   $}}{{Template "Go.SizeOf" $.To}}
+  {{else if IsVoid        $}}uint64(1)
+  {{else if IsBool        $}}uint64(1)
+  {{else if IsChar        $}}uint64(1)
+  {{else if IsU8          $}}uint64(1)
+  {{else if IsS8          $}}uint64(1)
+  {{else if IsU16         $}}uint64(2)
+  {{else if IsS16         $}}uint64(2)
+  {{else if IsF32         $}}uint64(4)
+  {{else if IsU32         $}}uint64(4)
+  {{else if IsS32         $}}uint64(4)
+  {{else if IsF64         $}}uint64(8)
+  {{else if IsU64         $}}uint64(8)
+  {{else if IsS64         $}}uint64(8)
+  {{else if IsEnum        $}}uint64(4)
+  {{else if IsString      $}}uint64(ϟl.GetPointer().GetSize())
+  {{else if IsPointer     $}}uint64(ϟl.GetPointer().GetSize())
+  {{else if IsReference   $}}uint64(ϟl.GetPointer().GetSize())
+  {{else if IsMap         $}}uint64(ϟl.GetPointer().GetSize())
+  {{else if IsInt         $}}uint64(ϟl.GetInteger().GetSize())
+  {{else if IsUint        $}}uint64(ϟl.GetInteger().GetSize())
+  {{else if IsSize        $}}uint64(ϟl.GetSize().GetSize())
+  {{else if IsSlice       $}}uint64(ϟl.GetI64().GetSize())
+  {{else if IsStaticArray $}}{{Template "Go.SizeOf" $.ValueType}}*{{$.Size}}
+  {{else if IsClass       $}}{{Template "Go.Type" $}}Size(ϟl)
+  {{else                   }}{{Error "macro Go.SizeOf called with unsupported type: %v" $}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the alignment in bytes of the specified type as a uint64
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.AlignOf"}}
+  {{AssertType $ "Type"}}
+
+  {{     if IsPseudonym   $}}{{Template "Go.AlignOf" $.To}}
+  {{else if IsVoid        $}}uint64(ϟl.GetI8().GetAlignment())
+  {{else if IsBool        $}}uint64(ϟl.GetI8().GetAlignment())
+  {{else if IsChar        $}}uint64(ϟl.GetI8().GetAlignment())
+  {{else if IsU8          $}}uint64(ϟl.GetI8().GetAlignment())
+  {{else if IsS8          $}}uint64(ϟl.GetI8().GetAlignment())
+  {{else if IsU16         $}}uint64(ϟl.GetI16().GetAlignment())
+  {{else if IsS16         $}}uint64(ϟl.GetI16().GetAlignment())
+  {{else if IsF32         $}}uint64(ϟl.GetF32().GetAlignment())
+  {{else if IsU32         $}}uint64(ϟl.GetI32().GetAlignment())
+  {{else if IsS32         $}}uint64(ϟl.GetI32().GetAlignment())
+  {{else if IsF64         $}}uint64(ϟl.GetF64().GetAlignment())
+  {{else if IsU64         $}}uint64(ϟl.GetI64().GetAlignment())
+  {{else if IsS64         $}}uint64(ϟl.GetI64().GetAlignment())
+  {{else if IsEnum        $}}uint64(ϟl.GetI32().GetAlignment())
+  {{else if IsString      $}}uint64(ϟl.GetPointer().GetAlignment())
+  {{else if IsPointer     $}}uint64(ϟl.GetPointer().GetAlignment())
+  {{else if IsReference   $}}uint64(ϟl.GetPointer().GetAlignment())
+  {{else if IsMap         $}}uint64(ϟl.GetPointer().GetAlignment())
+  {{else if IsInt         $}}uint64(ϟl.GetInteger().GetAlignment())
+  {{else if IsUint        $}}uint64(ϟl.GetInteger().GetAlignment())
+  {{else if IsSize        $}}uint64(ϟl.GetSize().GetAlignment())
+  {{else if IsSlice       $}}uint64(ϟl.GetI64().GetAlignment())
+  {{else if IsStaticArray $}}{{Template "Go.AlignOf" $.ValueType}}
+  {{else if IsClass       $}}{{Template "Go.Type" $}}Alignment(ϟl)
+  {{else                   }}{{Error "macro Go.AlignOf called with unsupported type: %v" $}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Returns the replay builder Value holding the specified variable.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.Replay.Value"}}
+  {{AssertType $.Type "Type"}}
+  {{AssertType $.Name "string"}}
+
+  {{if (GetAnnotation $.Type "replay_custom_value")}}{{$.Name}}.value(ϟb, ϟc, ϟg)
+  {{else if IsBool        $.Type}}value.Bool({{$.Name}})
+  {{else if IsS8          $.Type}}value.S8({{$.Name}})
+  {{else if IsU8          $.Type}}value.U8({{$.Name}})
+  {{else if IsChar        $.Type}}value.U8(uint8({{$.Name}}))
+  {{else if IsS16         $.Type}}value.S16({{$.Name}})
+  {{else if IsU16         $.Type}}value.U16({{$.Name}})
+  {{else if IsF32         $.Type}}value.F32({{$.Name}})
+  {{else if IsU32         $.Type}}value.U32({{$.Name}})
+  {{else if IsS32         $.Type}}value.S32({{$.Name}})
+  {{else if IsF64         $.Type}}value.F64({{$.Name}})
+  {{else if IsU64         $.Type}}value.U64({{$.Name}})
+  {{else if IsS64         $.Type}}value.S64({{$.Name}})
+  {{else if IsInt         $.Type}}value.S64({{$.Name}})
+  {{else if IsUint        $.Type}}value.U64({{$.Name}})
+  {{else if IsString      $.Type}}ϟb.String({{$.Name}})
+  {{else if IsPointer     $.Type}}{{$.Name}}.value(ϟb, ϟc, ϟg)
+  {{else if IsEnum        $.Type}}{{Template "Go.Replay.Value" "Type" $.Type.NumberType "Name" $.Name}}
+  {{else if IsStaticArray $.Type}}{{$.Name}}.value(ϟb, ϟc, ϟg)
+  {{else if IsPseudonym   $.Type}}{{$.Name}}.value(ϟb, ϟc, ϟg)
+  {{else if IsClass       $.Type}}{{$.Name}}.value(ϟb, ϟc, ϟg)
+  {{else                        }}{{Error "macro Go.Replay.Value '%v' called with unsupported type: %s" $.Name $.Type.Name}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the replay builder type for the given command non-return type.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.Replay.Type"}}
+  {{AssertType $ "Type"}}
+
+  {{     if IsPseudonym   $}}{{Template "Go.Replay.Type" $.To}}
+  {{else if IsEnum        $}}protocol.Type_Uint32
+  {{else if IsBool        $}}protocol.Type_Bool
+  {{else if IsInt         $}}protocol.Type_Int64
+  {{else if IsUint        $}}protocol.Type_Uint64
+  {{else if IsSize        $}}protocol.SizeType(ϟl.GetPointer().GetSize())
+  {{else if IsS8          $}}protocol.Type_Int8
+  {{else if IsU8          $}}protocol.Type_Uint8
+  {{else if IsS16         $}}protocol.Type_Int16
+  {{else if IsU16         $}}protocol.Type_Uint16
+  {{else if IsS32         $}}protocol.Type_Int32
+  {{else if IsU32         $}}protocol.Type_Uint32
+  {{else if IsF32         $}}protocol.Type_Float
+  {{else if IsS64         $}}protocol.Type_Int64
+  {{else if IsU64         $}}protocol.Type_Uint64
+  {{else if IsF64         $}}protocol.Type_Double
+  {{else if IsVoid        $}}protocol.Type_Void
+  {{else if IsStaticArray $}}protocol.Type_VolatilePointer
+  {{else if IsString      $}}protocol.Type_VolatilePointer
+  {{else if IsPointer     $}}protocol.Type_AbsolutePointer {{/* TODO: Might be volatile... */}}
+  {{else}}{{Error "macro Go.Replay.Type called with unsupported type: %s" $.Name}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the size in bytes of the specified type if it is fixed size
+  Otherwise emits the empty string.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.FixedSizeOf"}}
+  {{AssertType $ "Type"}}
+
+  {{     if IsPseudonym $}}{{Template "Go.FixedSizeOf" $.To}}
+  {{else if IsEnum      $}}{{Template "Go.SizeOf" $}}
+  {{else if IsBool      $}}{{Template "Go.SizeOf" $}}
+  {{else if IsChar      $}}{{Template "Go.SizeOf" $}}
+  {{else if IsS8        $}}{{Template "Go.SizeOf" $}}
+  {{else if IsU8        $}}{{Template "Go.SizeOf" $}}
+  {{else if IsS16       $}}{{Template "Go.SizeOf" $}}
+  {{else if IsU16       $}}{{Template "Go.SizeOf" $}}
+  {{else if IsS32       $}}{{Template "Go.SizeOf" $}}
+  {{else if IsU32       $}}{{Template "Go.SizeOf" $}}
+  {{else if IsF32       $}}{{Template "Go.SizeOf" $}}
+  {{else if IsS64       $}}{{Template "Go.SizeOf" $}}
+  {{else if IsU64       $}}{{Template "Go.SizeOf" $}}
+  {{else if IsF64       $}}{{Template "Go.SizeOf" $}}
+  {{else if IsVoid      $}}{{Template "Go.SizeOf" $}}
+  {{else if IsStaticArray $}}
+    {{$to :=(Macro "Go.FixedSizeOf" $.To)}}
+    {{if $to}}{{$to}} * {{$.Size}}{{end}}
+  {{else}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emit Integer, Address, Float, Void or Char. For the type.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.MemoryKind"}}
+  {{AssertType $ "Type"}}
+
+  {{     if IsPseudonym $}}{{Template "Go.MemoryKind" $.To}}
+  {{else if IsEnum      $}}Integer
+  {{else if IsBool      $}}Integer
+  {{else if IsChar      $}}Char
+  {{else if IsInt       $}}Integer
+  {{else if IsUint      $}}Integer
+  {{else if IsSize      $}}Integer
+  {{else if IsS8        $}}Integer
+  {{else if IsU8        $}}Integer
+  {{else if IsS16       $}}Integer
+  {{else if IsU16       $}}Integer
+  {{else if IsS32       $}}Integer
+  {{else if IsU32       $}}Integer
+  {{else if IsF32       $}}Float
+  {{else if IsS64       $}}Integer
+  {{else if IsU64       $}}Integer
+  {{else if IsF64       $}}Float
+  {{else if IsVoid      $}}Void
+  {{else if IsPointer   $}}Address
+  {{else if IsString    $}}Address
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the replay builder type for the given command return type.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.Replay.ReturnType"}}
+  {{AssertType $ "Type"}}
+
+  {{     if IsPseudonym $}}{{Template "Go.Replay.ReturnType" $.To}}
+  {{else if IsPointer   $}}protocol.Type_AbsolutePointer
+  {{else}}{{Template "Go.Replay.Type" $}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits a comment stating that the file is automatically generated.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.GeneratedHeader"}}
+  {{template "GeneratedCodeWarning"}}¶
+  package {{$}};
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits a comment block containing the specified text.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.CommentHeader"}}
+  {{AssertType $ "string"}} {{/* The comment block body text */}}
+  ////////////////////////////////////////////////////////////////////////////////
+  // {{.}}
+  ////////////////////////////////////////////////////////////////////////////////
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the go name of the parameter.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.Parameter"}}
+  {{AssertType $ "Parameter"}}
+
+  {{if $.Function.Subroutine}}
+    {{$ | GoPrivateName}}
+  {{else}}
+    ϟc.{{$ | GoPublicName}}()
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the go name of the subroutine.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.Subroutine"}}
+  {{AssertType $ "Function"}}
+
+  sub{{$ | GoCommandName}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the default initialization code for the fields of the specified class.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.DefaultClassFields"}}
+  {{AssertType $ "Class"}}
+
+  {{range $f := $.Fields}}
+    {{$name := $f | GoPublicName}}
+    {{if IsNil $f.Default}}
+      {{if $init := Macro "Go.DefaultInitialValue" $f.Type}}
+        {{$name}}: {{$init}}, §
+      {{end}}
+    {{else}}
+      {{$name}}: {{Macro "Go.Read" $f.Default}}, §
+    {{end}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the default initialization code for the specified type, or nothing if
+  the type has go-default initialization.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.DefaultInitialValue"}}
+  {{AssertType $ "Type"}}
+
+  {{if IsMap $}}
+    New{{Template "Go.Type" $}}()
+  {{else if IsClass $}}
+    {{if $fields := Macro "Go.DefaultClassFields" $}}
+      Make{{Template "Go.Type" $}}()
+    {{end}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the Go logic to execute the given statement.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.Read"}}
+  {{     if IsBoolValue        $}}{{$}}
+  {{else if IsNumericValue     $}}{{Template "Go.Type" $}}({{$}})
+  {{else if IsDefinitionUsage  $}}{{$.Definition.Name}}
+  {{else if IsUnaryOp          $}}{{$.Operator}}({{Template "Go.Read" $.Expression}})
+  {{else if IsStringValue      $}}{{printf "%q" $}}
+  {{else if IsMessageValue     $}}messages.{{$.AST.Name.Value | SplitOn "_" | Lower | Title}}({{ForEach $.Arguments "Go.Read" | JoinWith ", "}})
+  {{else if IsEnumEntry        $}}{{$.Owner.Name}}_{{$.Name}}
+  {{else if IsLocal            $}}{{$.Name}}
+  {{else if IsBitTest          $}}(({{Template "Go.Read" $.Bits}}) & ({{Template "Go.Read" $.Bitfield}}) != 0)
+  {{else if IsBinaryOp         $}}({{Template "Go.Read" $.LHS}}) {{$.Operator}} ({{Template "Go.Read" $.RHS}})
+  {{else if IsCast             $}}{{Template "Go.Cast" $}}
+  {{else if IsCall             $}}{{Template "Go.Call" $}}
+  {{else if IsUnknown          $}}{{Global "Go.InferredExpression" "1"}}{{Template "Go.Read" $.Inferred}}{{Global "Go.InferredExpression" ""}}
+  {{else if IsObserved         $}}{{Template "Go.Parameter" $.Parameter}}
+  {{else if IsMember           $}}{{Template "Go.Member" $}}
+  {{else if IsGlobal           $}}{{Template "Go.Global" $}}
+  {{else if IsParameter        $}}{{Template "Go.Parameter" $}}
+  {{else if IsArrayIndex       $}}{{Template "Go.Read" $.Array}}.Getʷ(ϟctx, ϟw, true, int({{Template "Go.Read" $.Index}}))
+  {{else if IsMapIndex         $}}{{Template "Go.MapIndex" $}}
+  {{else if IsMapContains      $}}{{Template "Go.MapContains" $}}
+  {{else if IsLength           $}}{{Template "Go.Type" $.Type}}({{Template "Go.ReadLength" "Type" (TypeOf $.Object) "Value" $.Object}})
+  {{else if IsNull             $}}{{Template "Go.Null" $.Type}}
+  {{else if IsNew              $}}new {{Template "Go.Type" $.Type}}
+  {{else if IsSliceContains    $}}{{Template "Go.Read" $.Slice  }}.Contains(ϟctx, {{Template "Go.Read" $.Value}}, ϟc, ϟg, ϟb)
+  {{else if IsSliceIndex       $}}{{Template "Go.Read" $.Slice  }}.Index({{Template "Go.Read" $.Index}}).{{Macro "Go.MemoryRead"}}[0]
+  {{else if IsSliceRange       $}}{{Template "Go.Read" $.Slice  }}.Slice({{Template "Go.Read" $.Range.LHS}}, {{Template "Go.Read" $.Range.RHS}})
+  {{else if IsPointerRange     $}}{{Template "Go.Read" $.Pointer}}.Slice({{Template "Go.Read" $.Range.LHS}}, {{Template "Go.Read" $.Range.RHS}}, ϟl)
+  {{else if IsClone            $}}{{Template "Go.Read" $.Slice  }}.Clone(ϟctx, ϟc, ϟg, ϟb, ϟw)
+  {{else if IsMake             $}}Make{{Template "Go.Type" $.Type}}({{Template "Go.Read" $.Size}}, ϟg)
+  {{else if IsSelect           $}}{{Template "Go.Select" $}}
+  {{else if IsArrayInitializer $}}{{Template "Go.ArrayInitializer" $}}
+  {{else if IsClassInitializer $}}New{{Template "Go.Type" $.Class}}{{Template "Go.ClassInitializer" $}}
+  {{else if IsFieldInitializer $}}{{Template "Go.Read" $.Value}}
+  {{else if IsCreate           $}}{{Template "Go.Create" $}}
+  {{else if IsCallable         $}}{{Template "Go.Subroutine" $.Function}}
+  {{else}}{{Error "macro Go.Read called with unsupported type: %T" $}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the Go logic to read the given expression, skipping any outer casts.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.ReadNoCast"}}
+  {{if      IsCast             $}}{{Template "Go.ReadNoCast" $.Object}}
+  {{else if IsNumericValue     $}}{{$}}
+  {{else}}{{Template "Go.Read" $}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the Go logic to read a slice or pointer, with special handling for
+  inferred expressions.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.MemoryRead"}}
+  {{if Global "Go.InferredExpression"}}
+    {{/*
+      If the expression is inferred, then it is the output of a command.
+      When building a replay, Read with ϟb would replace the output memory with
+      observed memory which is undesirable, so instead just perform regular
+      (non-replay-builder) read logic.
+    */}}
+    MustReadʷ(ϟctx, ϟc, ϟg, nil, ϟw)
+  {{else}}
+    MustReadʷ(ϟctx, ϟc, ϟg, ϟb, ϟw)
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the logic to execute a call statement / expression.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.Call"}}
+  {{AssertType $ "Call"}}
+
+  {{$args := ForEach $.Arguments "Go.Read" | JoinWith ", "}}
+  {{if $.Target.Object}}
+    {{Template "Go.Read" $.Target.Object}}.{{$.Target.Function.Name}}(ϟctx, {{$args}})
+  {{else if $.Target.Function.Extern}}
+    (externs{ϟctx, ϟc, ϟi, ϟg, ϟb, ϟw}.{{$.Target.Function.Name}}({{$args}}))
+  {{else if $.Target.Function.Subroutine}}
+    if ϟerr := {{Template "Go.Subroutine" $.Target.Function}}(ϟctx, ϟc, ϟi, ϟo, ϟg, ϟs, ϟt, ϟb, ϟw, {{$args}}); ϟerr != nil {
+      {{Template "Go.ReturnErr" "ϟerr"}}
+    }
+  {{else}}
+    {{$.Target.Function.Name}}({{$args}})
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the logic to cast a value to another type.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.Cast"}}
+  {{AssertType $ "Cast"}}
+
+  {{$src_ty := $.Object | TypeOf | Underlying | Unpack}}
+  {{$dst_ty := $.Type | Underlying}}
+  {{$src    := Macro "Go.Read" $.Object}}
+
+  {{/* T* -> number */}}{{if and (IsPointer $src_ty) (IsNumericType $dst_ty)}}
+    {{Template "Go.Type" $.Type}}({{$src}})
+  {{/* A[] -> B[] */}}{{else if and (IsSlice $src_ty) (IsSlice $dst_ty)}}
+    As{{Template "Go.Type" $.Type}}({{$src}}, ϟl)
+  {{/* T[] -> T* */}}{{else if and (IsSlice $src_ty) (IsPointer $dst_ty)}}
+    {{Template "Go.Type" $.Type}}({{$src}}.Index(0))
+  {{/* char* -> string */}}{{else if and (IsPointer $src_ty) (IsString $dst_ty)}}
+    strings.TrimRight(string(ϟmem.CharToBytes({{$src}}.StringSlice(ϟctx, ϟg).{{Macro "Go.MemoryRead"}})), "\x00")
+  {{/* char[] -> string */}}{{else if and (IsSlice $src_ty) (IsString $dst_ty)}}
+    string(ϟmem.CharToBytes({{$src}}.{{Macro "Go.MemoryRead"}}))
+  {{/* string[] -> char[] */}}{{else if and (IsString $src_ty) (IsSlice $dst_ty)}}
+    Make{{Template "Go.Type" $.Type}}FromString({{$src}}, ϟg)
+  {{/* bool -> number */}}{{else if and (IsBool $src_ty) (IsNumericType $dst_ty)}}
+    func() {{Template "Go.Type" $.Type}} {
+      if {{$src}} {
+        return 1
+      } else {
+        return 0
+      }
+    }()
+  {{/* number -> bool */}}{{else if and (IsNumericType $src_ty) (IsBool $dst_ty)}}
+    (({{$src}}) != 0)
+  {{else}}
+    {{Template "Go.Type" $.Type}}({{$src}})
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the logic to initialize a new instance of an array.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.ArrayInitializer"}}
+  {{AssertType $ "ArrayInitializer"}}
+
+  {{$a := $.Array | Underlying | Unpack}}
+  New{{Template "Go.Type" $}}({{ForEach $.Values "Go.Read" | JoinWith ", "}})
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the logic to initialize a new instance of a class.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.ClassInitializer"}}
+  {{AssertType $ "ClassInitializer"}}
+
+  (§
+    {{range $i, $v := $.InitialValues}}
+      {{$f := index $.Class.Fields $i}}
+      {{if IsNil $v}}
+        {{Template "Go.Null" $f.Type}}, §
+      {{else}}
+        {{Template "Go.Read" $v}}, §
+      {{end}}
+    {{end}}
+  )
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the logic to return a reference to a new instance of a class.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.Create"}}
+  {{AssertType $ "Create"}}
+
+  New{{Template "Go.Type" $.Type}}{{Template "Go.ClassInitializer" $.Initializer}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the logic to access a member on a class instance.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.Member"}}
+  {{AssertType $ "Member"}}
+
+  {{$ty := $.Object | TypeOf | Unpack}}
+  {{Template "Go.Read" $.Object}}§
+  {{if IsReference $ty}}{{if GetAnnotation $ty.To "resource"}}.OnAccess(ϟg)§{{end}}{{end}}
+  .{{$.Field | GoPublicName}}ʷ(ϟctx, ϟw, §
+  {{Template "Track" $.Field}})
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the logic to access a global variable.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.Global"}}
+  {{AssertType $ "Global"}}
+
+  {{if eq $.Name "$Thread"             }}ϟt
+  {{else                               }}ϟs.{{$.Name | GoPublicName}}ʷ(ϟctx, ϟw, §
+    {{Template "Track" $}})
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the logic to execute a map index expression.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.MapIndex"}}
+  {{AssertType $ "MapIndex"}}
+  {{Template "Go.Read" $.Map}}.Getʷ(ϟctx, ϟw, {{Template "TrackMap" $.Map}}, §
+    {{Template "Go.Read" $.Index}})
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the logic to execute a map containment expression.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.MapContains"}}
+  {{AssertType $ "MapContains"}}
+
+  {{Template "Go.Read" $.Map}}.Containsʷ(ϟctx, ϟw, {{Template "TrackMap" $.Map}}, §
+    {{Template "Go.Read" $.Key}})
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the logic to read the length of the specified expression by
+  Value and Type.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.ReadLength"}}
+  {{AssertType $.Type "Type"}}
+
+  {{$ty := Unpack $.Type}}
+  {{     if IsPseudonym   $ty}}{{Template "Go.ReadLength" "Type" $ty.To "Value" $.Value}}
+  {{else if IsSlice       $ty}}{{Template "Go.Read" $.Value}}.Count()
+  {{else if IsString      $ty}}len({{Template "Go.Read" $.Value}})
+  {{else if IsMap         $ty}}
+    {{Template "Go.Read" $.Value}}.Lenʷ(ϟctx, ϟw, §
+      {{if Macro "IsUntrackedMap" $.Value}}false§
+      {{else}}true§
+      {{end}})
+  {{else                     }}{{Error "macro Go.ReadLength called with unsupported type: %v" $.Type}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the logic to perform a select expression.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.Select"}}
+  {{AssertType $ "Select"}}
+
+  func() (result {{Template "Go.Type" $}}) {
+    switch {{Template "Go.Read" $.Value}} {
+      {{range $c := $.Choices}}
+        case {{range $i, $cond := $c.Conditions}}§
+          {{if $i}}, {{end}}{{Template "Go.Read" $cond}}§
+          {{end}}:
+            return {{Template "Go.Read" $c.Expression}}
+      {{end}}
+    default:
+      {{if not (IsNil $.Default)}}
+        return {{Template "Go.Read" $.Default}}
+      {{else}}
+        // TODO: better unmatched handling
+        panic(fmt.Errorf("Unmatched switch(%v) in command %T", {{Template "Go.Read" $.Value}}, ϟc))
+        return result
+      {{end}}
+    }
+  }()
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits the logic to return the error value in ϟerr and a possible null value.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Go.ReturnErr"}}
+  {{AssertType $ "string"}}
+  {{$err := $}}
+
+  {{$f := Global "CurrentFunction"}}
+  {{if $f}}
+    {{if and (IsFunction $f) ($f.Subroutine) (not (IsVoid $f.Return.Type))}}
+      return {{Template "Go.Null" $f.Return.Type}}, {{$err}}
+    {{else}}
+      return {{$err}}
+    {{end}}
+  {{else}}
+    return {{$err}}
+  {{end}}
+{{end}}
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits 1 if $ is map marked with @untrackedMap. This works both for global
+  variables and struct members.
+-------------------------------------------------------------------------------
+*/}}
+{{define "IsUntrackedMap"}}
+  {{/* Global map marked with @untrackedMap */}}
+  {{if GetAnnotation $ "untrackedMap"}}1§
+
+  {{/* Map field marked with @untrackedMap */}}
+  {{else if IsMember $}}
+    {{if GetAnnotation $.Field "untrackedMap"}}1{{end}}
+  {{end}}
+{{end}}
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits "false" if $ is map marked with @untrackedMap; otherwise emits "true".
+  This works both for global variables and struct members.
+-------------------------------------------------------------------------------
+*/}}
+{{define "TrackMap"}}
+  {{/* Global map marked with @untrackedMap */}}
+  {{if GetAnnotation $ "untrackedMap"}}false§
+
+  {{/* Map field marked with @untrackedMap */}}
+  {{else if IsMember $}}
+    {{if GetAnnotation $.Field "untrackedMap"}}false{{else}}true{{end}}
+
+  {{else}}true§
+  {{end}}
+{{end}}
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits "false" if $ is marked with @untracked;
+  otherwise emits "true".
+-------------------------------------------------------------------------------
+*/}}
+{{define "Track"}}
+  {{if GetAnnotation $ "untracked"}}false{{else}}true{{end}}
+{{end}}

@@ -1,0 +1,351 @@
+{{/*
+ * Copyright (C) 2017 Google Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */}}
+
+{{/* ---- Includes ---- */}}
+{{Include "../../templates/cpp_common.tmpl"}}
+
+{{$filename := print (Global "API") "_spy_helpers.cpp" }}
+{{$ | Macro "Exports" | Reflow 4 | Write $filename}}
+
+{{define "Exports"}}
+  {{AssertType $ "API"}}
+
+{{Template "C++.Copyright"}}
+¶
+#include "gapii/cc/vulkan_exports.h"
+#include "gapii/cc/vulkan_extras.h"
+#include "gapii/cc/vulkan_types.h"
+#include "gapii/cc/vulkan_layer_extras.h"
+#include "gapii/cc/vulkan_imports.h"
+#include "gapii/cc/vulkan_spy.h"
+¶
+#include "core/os/device/deviceinfo/cc/query.h"
+¶
+extern "C" {«
+// For this to function on Android the entry-point names for GetDeviceProcAddr
+// and GetInstanceProcAddr must be ${layer_name}/Get*ProcAddr.
+// This is a bit surprising given that we *MUST* also export
+// vkEnumerate*Layers without any prefix.
+VK_LAYER_EXPORT VKAPI_ATTR gapii::PFN_vkVoidFunction VKAPI_CALL
+gapid_vkGetDeviceProcAddr(gapii::VkDevice dev, const char *funcName) {
+    return gapii::vkGetDeviceProcAddr(dev, funcName);
+}
+
+VK_LAYER_EXPORT VKAPI_ATTR gapii::PFN_vkVoidFunction VKAPI_CALL
+gapid_vkGetInstanceProcAddr(gapii::VkInstance instance, const char *funcName) {
+    return gapii::vkGetInstanceProcAddr(instance, funcName);
+}
+
+// Documentation is sparse for android, looking at libvulkan.so
+// These 4 function must be defined in order for this to even
+// be considered for loading.
+VK_LAYER_EXPORT VKAPI_ATTR uint32_t VKAPI_CALL
+gapid_vkEnumerateInstanceLayerProperties(uint32_t *pCount,
+gapii::VkLayerProperties *pProperties) {
+    return gapii::vkEnumerateInstanceLayerProperties(pCount, pProperties);
+}
+
+// On Android this must also be defined, even if we have 0
+// layers to expose.
+VK_LAYER_EXPORT VKAPI_ATTR uint32_t VKAPI_CALL
+gapid_vkEnumerateInstanceExtensionProperties(const char *pLayerName, uint32_t *pCount,
+    gapii::VkExtensionProperties *pProperties) {
+        return gapii::vkEnumerateInstanceExtensionProperties(pLayerName, pCount, pProperties);
+}
+
+VK_LAYER_EXPORT VKAPI_ATTR uint32_t VKAPI_CALL
+gapid_vkEnumerateDeviceLayerProperties(gapii::VkPhysicalDevice device, uint32_t *pCount,
+gapii::VkLayerProperties *pProperties) {
+    return gapii::vkEnumerateDeviceLayerProperties(device, pCount, pProperties);
+}
+
+// On android this must also be defined, even if we have 0
+// layers to expose.
+VK_LAYER_EXPORT VKAPI_ATTR uint32_t VKAPI_CALL
+gapid_vkEnumerateDeviceExtensionProperties(gapii::VkPhysicalDevice device, const char *pLayerName, uint32_t *pCount,
+gapii::VkExtensionProperties *pProperties) {
+    return gapii::vkEnumerateDeviceExtensionProperties(device, pLayerName, pCount, pProperties);
+}
+}
+
+namespace gapii {
+PFN_vkVoidFunction VulkanSpy::SpyOverride_vkGetInstanceProcAddr(CallObserver*, VkInstance instance, const char* pName) {
+    {{range $c := AllCommands $}}
+        {{if (or (Macro "IsIndirected" "Command" $c "IndirectOn" "VkInstance") (Macro "IsIndirected" "Command" $c "IndirectOn" "VkDevice"))}}
+            {{$name := Macro "CmdName" $c}}
+            if(!strcmp(pName, "{{$name}}"))
+              return reinterpret_cast<PFN_vkVoidFunction>(gapii::{{$name}});
+        {{end}}
+    {{end}}
+
+    if (!strcmp(pName, "vkCreateInstance")) {
+        return reinterpret_cast<PFN_vkVoidFunction>(gapii::vkCreateInstance);
+    }
+    if (!strcmp(pName, "vkEnumerateInstanceExtensionProperties")) {
+        return reinterpret_cast<PFN_vkVoidFunction>(mImports.vkEnumerateInstanceExtensionProperties);
+    }
+    return nullptr;
+  }
+
+PFN_vkVoidFunction VulkanSpy::SpyOverride_vkGetDeviceProcAddr(CallObserver* observer, VkDevice device, const char* pName) {
+    {{range $c := AllCommands $}}
+        {{if (Macro "IsIndirected" "Command" $c "IndirectOn" "VkDevice")}}
+            {{$name := Macro "CmdName" $c}}
+            if(!strcmp(pName, "{{$name}}"))
+              return reinterpret_cast<PFN_vkVoidFunction>(gapii::{{$name}});
+        {{end}}
+    {{end}}
+    // This is not strictly correct, but some applications incorrectly
+    // call vkGetDeviceProcAddr, when they actually mean vkGetInstanceProcAddr.
+    PFN_vkVoidFunction f = SpyOverride_vkGetInstanceProcAddr(observer, mState.PhysicalDevices[mState.Devices[device]->mPhysicalDevice]->mInstance, pName);
+
+    // If we do not support the function as an instance function OR a device function, then defer to the actual device.
+    // It is likely that this will cause a failure in the future, as we will miss any state
+    // that is modified by this function, but we avoid modifying the application.
+    if (!f && device) {
+        if (mHideUnknownExtensions) {
+            GAPID_WARNING("Function %s was hidden from the application, as GAPID does not support it", pName);
+            return nullptr;
+        }
+        f = mImports.mVkDeviceFunctions[device].vkGetDeviceProcAddr(device, pName);
+        if (f) {
+            GAPID_ERROR("Unknown function %s resolved, it may be called but will not be tracked", pName);
+        }
+    }
+
+    return f;
+}
+
+uint32_t VulkanSpy::SpyOverride_vkCreateInstance(
+        CallObserver*,
+        const VkInstanceCreateInfo*  pCreateInfo,
+        const VkAllocationCallbacks* pAllocator,
+        VkInstance*                  pInstance) {
+
+    VkLayerInstanceCreateInfo *layer_info = get_layer_link_info(pCreateInfo);
+
+    // Grab the pointer to the next vkGetInstanceProcAddr in the chain.
+    gapii::VulkanImports::PFNVKGETINSTANCEPROCADDR get_instance_proc_addr =
+    layer_info->u.pLayerInfo->pfnNextGetInstanceProcAddr;
+
+    // From that get the next vkCreateInstance function.
+    gapii::VulkanImports::PFNVKCREATEINSTANCE create_instance = reinterpret_cast<gapii::VulkanImports::PFNVKCREATEINSTANCE>(
+        get_instance_proc_addr(0, "vkCreateInstance"));
+
+    mImports.pfn_vkCreateInstance = create_instance;
+
+    if (create_instance == NULL) {
+        return VkResult::VK_ERROR_INITIALIZATION_FAILED;
+    }
+
+    // The next layer may read from layer_info,
+    // so increment the pointer for it.
+    layer_info->u.pLayerInfo = layer_info->u.pLayerInfo->pNext;
+
+    // Actually call vkCreateInstance, and keep track of the result.
+    uint32_t result = create_instance(pCreateInfo, pAllocator, pInstance);
+
+    mImports.pfn_vkEnumerateInstanceExtensionProperties \
+        = reinterpret_cast<gapii::VulkanImports::PFNVKENUMERATEINSTANCEEXTENSIONPROPERTIES>(get_instance_proc_addr(*pInstance, "vkEnumerateInstanceExtensionProperties"));
+
+    // Send a header with Vulkan info added if we haven't done so.
+    const device::Drivers& drivers =
+        this->SpyBase::device_instance()->configuration().drivers();
+    bool should_send_header =
+        // If the has_vulkan() returns false, it means the Vulkan loader is not
+        // found in the first time we get device instance. However, if this
+        // vkCreateInstance is called (so we are here), the loader must be
+        // working now, so we should populate the Vulkan driver info in the
+        // device::Instance.
+        (!drivers.has_vulkan()) ||
+        // If VulkanDriver does present, but is empty, we should populate the
+        // VulkanDriver and send the new header.
+        (drivers.vulkan().layers_size() == 0 &&
+         drivers.vulkan().icd_and_implicit_layer_extensions_size() == 0 &&
+         drivers.vulkan().physical_devices_size() == 0);
+    if (should_send_header) {
+      if (query::updateVulkanDriver(SpyBase::device_instance(), *pInstance,
+                                    get_instance_proc_addr)) {
+        SpyBase::writeHeader();
+      } else {
+        GAPID_ERROR(
+            "Cannot update device info with Vulkan physical device info.");
+      }
+    }
+
+    // If it failed, then we don't need to track this instance.
+    if (result != VkResult::VK_SUCCESS) return result;
+
+    mImports.vkEnumerateInstanceExtensionProperties =
+        reinterpret_cast<VulkanImports::PFNVKENUMERATEINSTANCEEXTENSIONPROPERTIES>(get_instance_proc_addr(*pInstance, "vkEnumerateInstanceExtensionProperties"));
+    GAPID_DEBUG("Registering instance functions for %p", pInstance);
+
+    // Add this instance, along with the vkGetInstanceProcAddr to our
+    // map. This way when someone calls vkGetInstanceProcAddr, we can forward
+    // it to the correct "next" vkGetInstanceProcAddr.
+    {
+        // The same instance was returned twice, this is a problem.
+        auto insert_pt = mImports.mVkInstanceFunctions.insert({*pInstance, {}});
+        if (!insert_pt.second) {
+            // TODO(awoloszyn): Figure out if this is valid. Can an implementation return the same
+            // instance for all calls to vkCreateInstance.
+            return VkResult::VK_ERROR_INITIALIZATION_FAILED;
+        }
+        {{range $c := AllCommands $}}
+            {{if (Macro "IsIndirected" "Command" $c "IndirectOn" "VkInstance")}}
+                {{$name := Macro "CmdName" $c}}
+                insert_pt.first->second.{{$name}} = reinterpret_cast<gapii::VulkanImports::{{Template "C++.FunctionPtrType" $c}}>(get_instance_proc_addr(*pInstance, "{{$name}}"));
+            {{end}}
+        {{end}}
+    }
+    return result;
+}
+
+uint32_t VulkanSpy::SpyOverride_vkCreateDevice(
+        CallObserver*,
+        VkPhysicalDevice             physicalDevice,
+        const VkDeviceCreateInfo*    pCreateInfo,
+        const VkAllocationCallbacks* pAllocator,
+        VkDevice*                    pDevice) {
+
+    VkLayerDeviceCreateInfo *layer_info = get_layer_link_info(pCreateInfo);
+    // Grab the fpGetInstanceProcAddr from the layer_info. We will get
+    // vkCreateDevice from this.
+
+    VkInstance instance = mState.PhysicalDevices[physicalDevice]->mInstance;
+    auto& instance_functions = mImports.mVkInstanceFunctions[instance];
+
+    if (!instance_functions.vkCreateDevice) {
+      return VkResult::VK_ERROR_INITIALIZATION_FAILED;
+    }
+
+    // We want to store off the next vkGetDeviceProcAddr so keep track of it now,
+    // keep track of it now, before we increment the pointer.
+    gapii::VulkanImports::PFNVKGETDEVICEPROCADDR get_device_proc_addr =
+        layer_info->u.pLayerInfo->pfnNextGetDeviceProcAddr;
+
+    // The next layer may read from layer_info,
+    // so increment the pointer for it.
+    layer_info->u.pLayerInfo = layer_info->u.pLayerInfo->pNext;
+
+    //// Prepare the enabled extension list for the next layer's vkCreateDevice
+    auto enumerate_dev_exts = reinterpret_cast<gapii::VulkanImports::PFNVKENUMERATEDEVICEEXTENSIONPROPERTIES>(
+        instance_functions.vkEnumerateDeviceExtensionProperties);
+    uint32_t extension_count = 0;
+    uint32_t enumerate_extension_result;
+    enumerate_extension_result = enumerate_dev_exts(physicalDevice, nullptr, &extension_count, nullptr);
+    if (enumerate_extension_result != VkResult::VK_SUCCESS) {
+      return VkResult::VK_ERROR_INITIALIZATION_FAILED;
+    }
+    std::vector<VkExtensionProperties> ext_properties;
+    ext_properties.reserve(extension_count);
+    enumerate_extension_result = enumerate_dev_exts(physicalDevice, nullptr, &extension_count, ext_properties.data());
+    if (enumerate_extension_result != VkResult::VK_SUCCESS) {
+      return VkResult::VK_ERROR_INITIALIZATION_FAILED;
+    }
+    std::vector<const char*> extension_names;
+    for(uint32_t i = 0; i < pCreateInfo->menabledExtensionCount; i++) {
+      if (strcmp(pCreateInfo->mppEnabledExtensionNames[i], "VK_EXT_debug_marker")) {
+        extension_names.push_back(pCreateInfo->mppEnabledExtensionNames[i]);
+      }
+    }
+    VkDeviceCreateInfo override_create_info = *pCreateInfo;
+    override_create_info.mppEnabledExtensionNames = extension_names.data();
+    override_create_info.menabledExtensionCount = extension_names.size();
+    // Actually make the call to vkCreateDevice.
+    uint32_t result = instance_functions.vkCreateDevice(physicalDevice, &override_create_info, pAllocator, pDevice);
+
+    // If we failed, then we don't store the associated pointers.
+    if (result != VkResult::VK_SUCCESS) {
+      return result;
+    }
+
+    VkDevice device = *pDevice;
+    (void)device; // Use is conditional of preprocessor defines.
+    VulkanImports::VkDeviceFunctions* functions = nullptr;
+    (void)functions;
+
+    // Add this device, along with the vkGetDeviceProcAddr to our map.
+    // This way when someone calls vkGetDeviceProcAddr, we can forward
+    // it to the correct "next" vkGetDeviceProcAddr.
+    {
+        auto insert_pt = mImports.mVkDeviceFunctions.insert({*pDevice, {}});
+        functions = &insert_pt.first->second;
+        if (!insert_pt.second) {
+            return VkResult::VK_ERROR_INITIALIZATION_FAILED;
+        }
+        {{range $c := AllCommands $}}
+            {{if (Macro "IsIndirected" "Command" $c "IndirectOn" "VkDevice")}}
+                {{$name := Macro "CmdName" $c}}
+                insert_pt.first->second.{{$name}} = reinterpret_cast<gapii::VulkanImports::{{Template "C++.FunctionPtrType" $c}}>(get_device_proc_addr(*pDevice, "{{$name}}"));
+            {{end}}
+        {{end}}
+    }
+
+    #if COHERENT_TRACKING_ENABLED
+        if (!mMemoryTracker.IsInstalled() && !mDisableCoherentMemoryTracker) {
+            mMemoryTracker.EnableMemoryTracker();
+
+            VkPhysicalDeviceMemoryProperties props(arena());
+            instance_functions.vkGetPhysicalDeviceMemoryProperties(physicalDevice, &props);
+            uint32_t coherent_bit = static_cast<uint32_t>(-1);
+            for (uint32_t i = 0 ; i < props.mmemoryTypeCount; ++i) {
+                if ((props.mmemoryTypes[i].mpropertyFlags & (
+                    VkMemoryPropertyFlagBits::VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                    VkMemoryPropertyFlagBits::VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) ==
+                            (VkMemoryPropertyFlagBits::VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                             VkMemoryPropertyFlagBits::VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+                    coherent_bit = i;
+                }
+            }
+            if (coherent_bit == static_cast<uint32_t>(-1)) {
+                return VkResult::VK_ERROR_INITIALIZATION_FAILED;
+            }
+            uint32_t pagesize = track_memory::GetPageSize();
+            VkMemoryAllocateInfo a = {
+                VkStructureType::VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                nullptr,
+                pagesize,
+                coherent_bit
+            };
+            VkDeviceMemory allocatedMemory;
+            if (0 != functions->vkAllocateMemory(device, &a, nullptr, &allocatedMemory)) {
+                    return VkResult::VK_ERROR_INITIALIZATION_FAILED;
+            }
+
+            void* pMemory;
+            functions->vkMapMemory(device, allocatedMemory, 0, pagesize, 0, &pMemory);
+
+            mMemoryTracker.TrackRange(pMemory, pagesize);
+            memset(pMemory, 32, pagesize);
+            functions->vkFreeMemory(device, allocatedMemory, nullptr);
+            bool tracked = false;
+            mMemoryTracker.HandleAndClearDirtyIntersects(pMemory, pagesize, [&tracked](void*, size_t) {
+                tracked = true;
+            });
+            mMemoryTracker.UntrackRange(pMemory, pagesize);
+            m_coherent_memory_tracking_enabled = tracked;
+            if (!m_coherent_memory_tracking_enabled) {
+                GAPID_WARNING("Memory tracker requested, but does not work on this system");
+                GAPID_WARNING("Falling back to non-tracked memory");
+            }
+        }
+    #endif
+
+    return result;
+}
+}
+{{end}}

@@ -1,0 +1,6 @@
+**/gapic.iml
+/.idea
+/bin
+/out
+gapic.jar
+hs_err_pid*.log

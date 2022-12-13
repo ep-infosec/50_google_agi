@@ -1,0 +1,1064 @@
+// Copyright (C) 2018 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Based off of the original vulkan.h header file which has the following
+// license.
+
+// Copyright (c) 2015 The Khronos Group Inc.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and/or associated documentation files (the
+// "Materials"), to deal in the Materials without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Materials, and to
+// permit persons to whom the Materials are furnished to do so, subject to
+// the following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Materials.
+//
+// THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+// MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+
+///////////
+// Image //
+///////////
+
+@internal class ImageInfo {
+  VkImageCreateFlags                             Flags
+  VkImageType                                    ImageType
+  VkFormat                                       Format
+  VkExtent3D                                     Extent
+  u32                                            MipLevels
+  u32                                            ArrayLayers
+  VkSampleCountFlagBits                          Samples
+  VkImageTiling                                  Tiling
+  VkImageUsageFlags                              Usage
+  VkSharingMode                                  SharingMode
+  map!(u32, u32)                                 QueueFamilyIndices
+  VkImageLayout                                  InitialLayout
+  ref!DedicatedAllocationBufferImageCreateInfoNV DedicatedAllocationNV
+  ref!ImageFormatList                            ViewFormatList
+  VkExternalMemoryHandleTypeFlags                ExternalHandleTypeFlags
+  u64                                            AndroidExternalFormat
+}
+
+@resource
+@internal class ImageObject {
+  @unused VkDevice                                              Device
+
+  // mapping from plane bits (0 for non-disjoint or single planar images) to memory information
+  map!(VkImageAspectFlagBits, ref!ImagePlaneMemoryInfo)         PlaneMemoryInfo
+
+  // mapping from the resource offsets to the sparse bindings in the unit of sparse blocks
+  map!(u64, VkSparseMemoryBind)                                 OpaqueSparseMemoryBindings
+
+  // mapping from image aspect flag bits to sparse binding info
+  map!(VkImageAspectFlagBits, ref!SparseBoundImageAspectInfo)   SparseImageMemoryBindings
+  @unused bool                                                  IsSwapchainImage
+  VkImage                                                       VulkanHandle
+  ImageInfo                                                     Info
+  VkImageAspectFlags                                            ImageAspect
+  map!(VkImageAspectFlagBits, ref!ImageAspect)                  Aspects
+  @unused ref!VulkanDebugMarkerInfo                             DebugInfo
+  map!(VkImageAspectFlagBits, VkSparseImageMemoryRequirements)  SparseMemoryRequirements
+
+  // Vulkan 1.1 promoted from extension: VK_KHR_dedicated_allocation
+  ref!DedicatedRequirements                                     DedicatedRequirements
+
+  // If every layer/level is set to the same queue, then set it here instead.
+  // This can save expensive looping through Aspects/Layers/Levels
+  @untracked @unused ref!QueueObject                            LastBoundQueue
+  map!(VkImageView, ref!ImageViewObject)                        Views
+}
+
+@internal class MutableImageDeviceGroupBinding {
+  ref!ImageDeviceGroupBinding Binding
+}
+
+@internal class ImageDeviceGroupBinding {
+  map!(u32, u32)                     Bindings
+  map!(u32, VkRect2D)                SplitInstanceBindings
+}
+
+@internal class ImagePlaneMemoryInfo {
+  ref!DeviceMemoryObject  BoundMemory
+  VkDeviceSize            BoundMemoryOffset
+  VkMemoryRequirements    MemoryRequirements
+  ref!ImageDeviceGroupBinding  ImageDeviceGroupBinding
+}
+
+@internal class ImageAspect {
+  dense_map!(u32, ref!ImageLayer) Layers
+}
+
+@internal class ImageLayer {
+  dense_map!(u32, ref!ImageLevel) Levels
+}
+
+@internal class ImageLevel {
+  u32         Width
+  u32         Height
+  @unused u32 Depth
+  @spy_disabled
+  @hidden @nobox @internal u8[]      Data
+  VkImageLayout                      Layout
+  ref!VkSubresourceLayout            LinearLayout
+  @untracked @unused ref!QueueObject LastBoundQueue
+}
+
+@internal class SparseBoundImageAspectInfo {
+  map!(u32, ref!SparseBoundImageLayerInfo) Layers
+}
+
+@internal class SparseBoundImageLayerInfo {
+  map!(u32, ref!SparseBoundImageLevelInfo) Levels
+}
+
+@internal class SparseBoundImageLevelInfo {
+  // mapping from memory offset to sparse block info
+  map!(u64, ref!SparseBoundImageBlockInfo) Blocks
+}
+
+@internal class SparseBoundImageBlockInfo {
+  VkOffset3D              Offset
+  VkExtent3D              Extent
+  VkDeviceMemory          Memory
+  VkDeviceSize            MemoryOffset
+  VkDeviceSize            Size
+  VkSparseMemoryBindFlags Flags
+}
+
+@internal @serialize class FetchedImageMemoryRequirements {
+  map!(VkImageAspectFlagBits, VkMemoryRequirements)             PlaneBitsToMemoryRequirements
+  map!(VkImageAspectFlagBits, VkSparseImageMemoryRequirements)  AspectBitsToSparseMemoryRequirements
+}
+
+@internal @serialize class LinearImageLayouts {
+  map!(u32, ref!LinearImageAspectLayouts) AspectLayouts
+}
+
+@internal class LinearImageAspectLayouts {
+  map!(u32, ref!LinearImageLayerLayouts) LayerLayouts
+}
+
+@internal class LinearImageLayerLayouts {
+  map!(u32, ref!VkSubresourceLayout) LevelLayouts
+}
+
+@indirect("VkDevice")
+@override
+cmd VkResult vkCreateImage(
+    VkDevice                 device,
+    const VkImageCreateInfo* pCreateInfo,
+    AllocationCallbacks      pAllocator,
+    VkImage*                 pImage) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if pCreateInfo == null { vkErrorNullPointer("VkImageCreateInfo") }
+  info := pCreateInfo[0]
+
+  imageInfo := ImageInfo(
+    Flags:          info.flags,
+    ImageType:      info.imageType,
+    Format:         info.format,
+    Extent:         info.extent,
+    MipLevels:      info.mipLevels,
+    ArrayLayers:    info.arrayLayers,
+    Samples:        info.samples,
+    Tiling:         info.tiling,
+    Usage:          info.usage,
+    SharingMode:    info.sharingMode,
+    InitialLayout:  info.initialLayout,
+  )
+
+  if (info.sharingMode == VK_SHARING_MODE_CONCURRENT) {
+    queueFamilyIndices := info.pQueueFamilyIndices[0:info.queueFamilyIndexCount]
+    for i in (0 .. info.queueFamilyIndexCount) {
+      imageInfo.QueueFamilyIndices[i] = queueFamilyIndices[i]
+    }
+  }
+
+  imageAspect := as!VkImageAspectFlags(getAspectBitsFromImageFormat(info.format))
+
+  hasSparseBit := (as!u32(info.flags) & as!u32(VK_IMAGE_CREATE_SPARSE_BINDING_BIT)) != 0
+
+  // Handle pNext
+  if info.pNext != null {
+    numPNext := numberOfPNext(info.pNext)
+    next := MutableVoidPtr(as!void*(info.pNext))
+    for i in (0 .. numPNext) {
+      sType := as!const VkStructureType*(next.Ptr)[0]
+      switch sType {
+        case VK_STRUCTURE_TYPE_DEDICATED_ALLOCATION_IMAGE_CREATE_INFO_NV: {
+          ext := as!VkDedicatedAllocationImageCreateInfoNV*(next.Ptr)[0]
+          imageInfo.DedicatedAllocationNV = new!DedicatedAllocationBufferImageCreateInfoNV(
+            DedicatedAllocation: ext.dedicatedAllocation
+          )
+        }
+        case VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO_KHR: {
+           ext := as!VkImageFormatListCreateInfoKHR*(next.Ptr)[0]
+           ifl := new!ImageFormatList()
+           if (ext.viewFormatCount > 0) {
+            formats := ext.pViewFormats[0:ext.viewFormatCount]
+            for j in (0 .. ext.viewFormatCount) {
+              ifl.viewFormats[j] = formats[j]
+            }
+           }
+           imageInfo.ViewFormatList = ifl
+        }
+        case VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO: {
+          ext := as!VkExternalMemoryImageCreateInfo*(next.Ptr)[0]
+          imageInfo.ExternalHandleTypeFlags = ext.handleTypes
+        }
+        case VK_STRUCTURE_TYPE_EXTERNAL_FORMAT_ANDROID: {
+          ext := as!VkExternalFormatANDROID*(next.Ptr)[0]
+          imageInfo.AndroidExternalFormat = ext.externalFormat
+        }
+      }
+      next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+    }
+  }
+
+  handle := ?
+  if pImage == null { vkErrorNullPointer("VkImage") }
+  pImage[0] = handle
+  object := new!ImageObject(
+    Device:            device,
+    IsSwapchainImage:  false,
+    VulkanHandle:      handle,
+    Info:              imageInfo,
+    ImageAspect:       imageAspect,
+  )
+
+  for _ , _ , aspectBit in unpackImageAspectFlags(object, imageAspect) {
+    divisor := getAspectSizeDivisor(info.format, aspectBit)
+    object.Aspects[aspectBit] = new!ImageAspect()
+    aspect := object.Aspects[aspectBit]
+    for j in (0 .. info.arrayLayers) {
+      aspect.Layers[j] = new!ImageLayer()
+      for i in (0 .. info.mipLevels) {
+        width := getMipSize(info.extent.width, i) / divisor.Width
+        height := getMipSize(info.extent.height, i) / divisor.Height
+        depth := getMipSize(info.extent.depth, i)
+        level := new!ImageLevel(
+          Width: width,
+          Height:  height,
+          Depth:  depth,
+          Layout:  info.initialLayout)
+        aspect.Layers[j].Levels[i] = level
+      }
+    }
+  }
+
+  fetchedRequirements := fetchImageMemoryRequirements(device, object, hasSparseBit)
+  // If the vkCreateImage is inserted by GAPID (e.g. the staging image for
+  // reading framebuffer), NO memory requirements will be returned.
+  if fetchedRequirements != null {
+    for _, p, _ in fetchedRequirements.PlaneBitsToMemoryRequirements {
+      if !(p in object.PlaneMemoryInfo) {
+        object.PlaneMemoryInfo[p] = new!ImagePlaneMemoryInfo()
+      }
+      object.PlaneMemoryInfo[p].MemoryRequirements = fetchedRequirements.PlaneBitsToMemoryRequirements[p]
+    }
+    for _, a, _ in fetchedRequirements.AspectBitsToSparseMemoryRequirements {
+      object.SparseMemoryRequirements[a] = fetchedRequirements.AspectBitsToSparseMemoryRequirements[a]
+    }
+  }
+
+  // If the image tiling is LINEAR, get the VkSubresourceLayout for each linear image level
+  if (info.tiling == VK_IMAGE_TILING_LINEAR) {
+    linearLayouts := fetchLinearImageSubresourceLayouts(device, object,
+      VkImageSubresourceRange(
+        aspectMask:      imageAspect,
+        baseMipLevel:    0,
+        levelCount:      imageInfo.MipLevels,
+        baseArrayLayer:  0,
+        layerCount:      imageInfo.ArrayLayers,
+      ))
+    if (linearLayouts != null) {
+      for _ , aspectBit , al in linearLayouts.AspectLayouts {
+        for _ , layer , layl in al.LayerLayouts {
+          for _ , level , levl in layl.LevelLayouts {
+            if levl != null {
+              object.Aspects[as!VkImageAspectFlagBits(aspectBit)].Layers[layer].Levels[level].LinearLayout = levl
+            }
+          }
+        }
+      }
+    }
+  }
+
+  Images[handle] = object
+
+  return ?
+}
+
+@indirect("VkDevice")
+cmd void vkDestroyImage(
+    VkDevice            device,
+    VkImage             image,
+    AllocationCallbacks pAllocator) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if !(image in Images) { vkErrorInvalidImage(image) } else {
+    if (image != as!VkImage(0)) {
+      imageObject := Images[image]
+      for _, _, m in imageObject.PlaneMemoryInfo {
+        if m.BoundMemory != null {
+          // If the memory is deleted first, then do not try to remove ourselves.
+          delete(m.BoundMemory.BoundObjects, as!u64(image))
+        }
+      }
+      delete(Images, image)
+      for _ , _ , v in imageObject.Views {
+        v.Image = null
+      }
+      for i in (0 .. LastPresentInfo.PresentImageCount) {
+        if (LastPresentInfo.PresentImages[i] != null) {
+          if (LastPresentInfo.PresentImages[i].VulkanHandle == image) {
+            LastPresentInfo.PresentImages[i] = null
+          }
+        }
+      }
+    }
+  }
+}
+
+@indirect("VkDevice")
+cmd void vkGetImageSubresourceLayout(
+    VkDevice                  device,
+    VkImage                   image,
+    const VkImageSubresource* pSubresource,
+    VkSubresourceLayout*      pLayout) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if !(image in Images) { vkErrorInvalidImage(image) }
+  _ = pSubresource[0]
+
+  pLayout[0] = ?
+}
+
+sub void BindImageMemory(
+    VkImage        image,
+    VkDeviceMemory memory,
+    VkDeviceSize   memoryOffset,
+    VkImageAspectFlagBits plane,
+    ref!ImageDeviceGroupBinding deviceGroupBinding) {
+  if !(memory in DeviceMemories) {
+    vkErrorInvalidDeviceMemory(memory)
+  } else {
+    if !(image in Images) {
+      vkErrorInvalidImage(image)
+    } else {
+      imageObject := Images[image]
+      if !(plane in imageObject.PlaneMemoryInfo) {
+        imageObject.PlaneMemoryInfo[plane] = new!ImagePlaneMemoryInfo()
+      }
+      imageObject.PlaneMemoryInfo[plane].BoundMemory = DeviceMemories[memory]
+      imageObject.PlaneMemoryInfo[plane].BoundMemoryOffset = memoryOffset
+      imageObject.PlaneMemoryInfo[plane].ImageDeviceGroupBinding = deviceGroupBinding
+      DeviceMemories[memory].BoundObjects[as!u64(image)] = memoryOffset
+
+      for _ , _ , aspectBit in unpackImageAspectFlags(imageObject, imageObject.ImageAspect) {
+        aspect := imageObject.Aspects[aspectBit]
+        for j in (0 .. imageObject.Info.ArrayLayers) {
+          for i in (0 .. imageObject.Info.MipLevels) {
+            level := aspect.Layers[j].Levels[i]
+            elementAndTexelBlockSize := getElementAndTexelBlockSizeForAspect(imageObject.Info.Format, aspectBit)
+            // Roundup the width and height in the number of blocks.
+            widthInBlocks := roundUpTo(level.Width, elementAndTexelBlockSize.TexelBlockSize.Width)
+            heightInBlocks := roundUpTo(level.Height, elementAndTexelBlockSize.TexelBlockSize.Height)
+            elementSize := elementAndTexelBlockSize.ElementSize
+            tightlyPackedSize := widthInBlocks * heightInBlocks * level.Depth * elementSize
+
+            // If the image has LINEAR tiling link the data back to the bound device memory.
+            // TODO: If the image as a whole requires more memory than we
+            // calculated, we should link the data back to the bound device memory
+            // no matter whether the tiling is LINEAR or OPTIMAL. But we need to
+            // come up with a 'linear layout' in GAPID.
+            if level.LinearLayout != null {
+              loffset := as!u64(memoryOffset + level.LinearLayout.offset)
+              lsize := as!u64(level.LinearLayout.size)
+              level.Data = getImagePlaneMemoryInfo(imageObject, plane).BoundMemory.Data[loffset:loffset + lsize]
+            } else {
+              level.Data = make!u8(tightlyPackedSize)
+            }
+          }
+        }
+      }
+
+      if (Images[image].Info.DedicatedAllocationNV != null) && (DeviceMemories[memory].DedicatedAllocationNV == null) {
+        vkErrorExpectNVDedicatedlyAllocatedHandle("VkImage", as!u64(image))
+      }
+      if (Images[image].Info.DedicatedAllocationNV == null) && (DeviceMemories[memory].DedicatedAllocationNV != null) {
+        vkErrorExpectNVDedicatedlyAllocatedHandle("VkDeviceMemory", as!u64(memory))
+      }
+    }
+  }
+}
+
+@indirect("VkDevice")
+cmd VkResult vkBindImageMemory(
+    VkDevice       device,
+    VkImage        image,
+    VkDeviceMemory memory,
+    VkDeviceSize   memoryOffset) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  // BindImageMemory only handles non-disjoint images, meaning
+  // we always use plane-0 for allocation.
+  BindImageMemory(image, memory, memoryOffset, as!VkImageAspectFlagBits(0), null)
+  return ?
+}
+
+////////////////
+// Image view //
+////////////////
+
+@internal class ImageViewUsageInfo {
+  VkImageUsageFlags Usage
+}
+
+@internal class ImageViewObject {
+  @unused VkDevice                  Device
+  @unused VkImageView               VulkanHandle
+  @unused VkImageViewType           Type
+  @unused VkFormat                  Format
+  @unused VkComponentMapping        Components
+  @unused VkImageSubresourceRange   SubresourceRange
+  ref!ImageObject                   Image
+  @unused ref!VulkanDebugMarkerInfo DebugInfo
+  // Do not track dependency for the following back-references.
+  @hidden @untrackedMap @untracked
+  map!(VkDescriptorSet, map!(u32, map!(u32, bool))) DescriptorUsers
+  @hidden @untrackedMap @untracked
+  map!(VkFramebuffer, map!(u32, bool)) FramebufferUsers
+  // Vulkan 1.1 core
+  @unused ref!ImageViewUsageInfo UsageInfo
+  @unused ref!SamplerYcbcrConversionObject YcbcrConversion
+}
+
+@indirect("VkDevice")
+cmd VkResult vkCreateImageView(
+    VkDevice                     device,
+    const VkImageViewCreateInfo* pCreateInfo,
+    AllocationCallbacks          pAllocator,
+    VkImageView*                 pView) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if pCreateInfo == null { vkErrorNullPointer("VkImageViewCreateInfo") }
+  image_view_create_info := pCreateInfo[0]
+  imageViewObject := new!ImageViewObject(
+    Device:                 device,
+    Type:                   image_view_create_info.viewType,
+    Format:                 image_view_create_info.format,
+    Components:             image_view_create_info.components,
+    SubresourceRange:       image_view_create_info.subresourceRange
+  )
+  // handle pNext
+  if image_view_create_info.pNext != null {
+    numPNext := numberOfPNext(image_view_create_info.pNext)
+    next := MutableVoidPtr(as!void*(image_view_create_info.pNext))
+    for i in (0 .. numPNext) {
+      sType := as!const VkStructureType*(next.Ptr)[0]
+      switch sType {
+        case VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO: {
+          ext := as!VkImageViewUsageCreateInfo*(next.Ptr)[0]
+          imageViewObject.UsageInfo = new!ImageViewUsageInfo(Usage: ext.usage)
+        }
+        case VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO: {
+          ycbcrInfo := as!VkSamplerYcbcrConversionInfo*(next.Ptr)[0]
+          conversion := ycbcrInfo.conversion
+          if conversion in SamplerYcbcrConversions {
+            imageViewObject.YcbcrConversion = SamplerYcbcrConversions[conversion]
+          }
+        }
+      }
+      next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+    }
+  }
+
+  handle := ?
+  if !(image_view_create_info.image in Images) { vkErrorInvalidImage(image_view_create_info.image) } else {
+    imageObject := Images[image_view_create_info.image]
+    imageViewObject.Image = imageObject
+
+    // Validate the following Valid Usage for VkImageViewCreateInfo:
+    //  > If image is non-sparse then it must be bound completely and
+    //  > contiguously to a single VkDeviceMemory object.
+    // Checking this here also ensures correct dependencies from
+    // vkCreateImageView to vkBindImageMemory.
+    hasSparseBit := (as!u32(imageObject.Info.Flags) & as!u32(VK_IMAGE_CREATE_SPARSE_BINDING_BIT)) != 0
+    // TODO: Handle multi-planar images
+    planeMemInfo := getImagePlaneMemoryInfo(imageObject, as!VkImageAspectFlagBits(0))
+    if planeMemInfo != null {
+      planeBoundMemory := planeMemInfo.BoundMemory
+      if (!hasSparseBit) && (planeBoundMemory == null) {
+        vkErrorImageMemoryNotBound(image_view_create_info.image)
+      }
+      if (((0xFFFFFFFF - as!u32(imageObject.ImageAspect)) & as!u32(translateImageAspectFlags(imageObject, image_view_create_info.subresourceRange.aspectMask))) != 0) {
+        vkErrorInvalidImageAspect(imageObject.VulkanHandle,
+          as!VkImageAspectFlagBits(image_view_create_info.subresourceRange.aspectMask))
+      }
+      imageObject.Views[handle] = imageViewObject
+    }
+  }
+  if pView == null {
+    vkErrorNullPointer("VkImageView")
+  } else {
+    pView[0] = handle
+    imageViewObject.VulkanHandle = handle
+    ImageViews[handle] = imageViewObject
+  }
+  return ?
+}
+
+@indirect("VkDevice")
+cmd void vkDestroyImageView(
+    VkDevice            device,
+    VkImageView         imageView,
+    AllocationCallbacks pAllocator) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+
+  if imageView in ImageViews {
+    viewObj := ImageViews[imageView]
+
+    // Release the binding with descriptor sets
+    for _, vkDesSet, bindingAndIndices in viewObj.DescriptorUsers {
+      if vkDesSet in DescriptorSets {
+        desSetObj := DescriptorSets[vkDesSet]
+        for _, binding, indices in bindingAndIndices {
+          if binding in desSetObj.Bindings {
+            switch desSetObj.Bindings[binding].BindingType {
+              case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                  VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+                  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                  VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT: {
+                _ = indices
+                for _, index, _ in indices {
+                  if index in desSetObj.Bindings[binding].ImageBinding {
+                    if desSetObj.Bindings[binding].ImageBinding[index].ImageView == imageView {
+                      desSetObj.Bindings[binding].ImageBinding[index].ImageView = as!VkImageView(0)
+                    }
+                  }
+                }
+              }
+              default: {
+                // do nothing
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Release the binding with framebuffers
+    for _, vkFmBuf, attachmentIndices in viewObj.FramebufferUsers {
+      if vkFmBuf in Framebuffers {
+        fmBufObj := Framebuffers[vkFmBuf]
+        if fmBufObj != null {
+          for _, index, _ in attachmentIndices {
+            if index in fmBufObj.ImageAttachments {
+              v := fmBufObj.ImageAttachments[index]
+              if (v != null) && (v == viewObj) {
+                fmBufObj.ImageAttachments[index] = null
+              }
+            }
+          }
+        }
+      }
+    }
+
+    delete(ImageViews, imageView)
+    if ((viewObj.Image != null) && (imageView in viewObj.Image.Views)) {
+      delete(viewObj.Image.Views, imageView)
+    }
+  }
+}
+
+/////////////
+// Sampler //
+/////////////
+
+@internal class SamplerObject {
+  @unused VkDevice                  Device
+  @unused VkSampler                 VulkanHandle
+  @unused VkFilter                  MagFilter
+  @unused VkFilter                  MinFilter
+  @unused VkSamplerMipmapMode       MipMapMode
+  @unused VkSamplerAddressMode      AddressModeU
+  @unused VkSamplerAddressMode      AddressModeV
+  @unused VkSamplerAddressMode      AddressModeW
+  @unused f32                       MipLodBias
+  @unused VkBool32                  AnisotropyEnable
+  @unused f32                       MaxAnisotropy
+  @unused VkBool32                  CompareEnable
+  @unused VkCompareOp               CompareOp
+  @unused f32                       MinLod
+  @unused f32                       MaxLod
+  @unused VkBorderColor             BorderColor
+  @unused VkBool32                  UnnormalizedCoordinates
+  @unused ref!VulkanDebugMarkerInfo DebugInfo
+  // Do not track dependency for the following back-references.
+  @hidden @untrackedMap @untracked
+  map!(VkDescriptorSet, map!(u32, map!(u32, bool))) DescriptorUsers
+
+  // Vulkan 1.1 core
+  @unused ref!SamplerYcbcrConversionObject YcbcrConversion
+
+  // Vulkan 1.2 core
+  @unused ref!SamplerReductionModeCreateInfo SamplerReductionModeCreateInfo
+
+  // @extension("VK_EXT_custom_border_color")
+  @unused ref!SamplerCustomBorderColorCreateInfoEXT CustomBorderColorInfo
+}
+
+@indirect("VkDevice")
+cmd VkResult vkCreateSampler(
+    VkDevice                   device,
+    const VkSamplerCreateInfo* pCreateInfo,
+    AllocationCallbacks        pAllocator,
+    VkSampler*                 pSampler) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if pCreateInfo == null { vkErrorNullPointer("VkSamplerCreateInfo") }
+  create_info := pCreateInfo[0]
+  sampler := new!SamplerObject(
+    Device:                   device,
+    MagFilter:                create_info.magFilter,
+    MinFilter:                create_info.minFilter,
+    MipMapMode:               create_info.mipmapMode,
+    AddressModeU:             create_info.addressModeU,
+    AddressModeV:             create_info.addressModeV,
+    AddressModeW:             create_info.addressModeW,
+    MipLodBias:               create_info.mipLodBias,
+    AnisotropyEnable:         create_info.anisotropyEnable,
+    MaxAnisotropy:            create_info.maxAnisotropy,
+    CompareEnable:            create_info.compareEnable,
+    CompareOp:                create_info.compareOp,
+    MinLod:                   create_info.minLod,
+    MaxLod:                   create_info.maxLod,
+    BorderColor:              create_info.borderColor,
+    UnnormalizedCoordinates:  create_info.unnormalizedCoordinates
+  )
+  // handle pNext
+  if create_info.pNext != null {
+    numPNext := numberOfPNext(create_info.pNext)
+    next := MutableVoidPtr(as!void*(create_info.pNext))
+    for i in (0 .. numPNext) {
+      sType := as!const VkStructureType*(next.Ptr)[0]
+      switch sType {
+        case VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO: {
+          ycbcrInfo := as!VkSamplerYcbcrConversionInfo*(next.Ptr)[0]
+          conversion := ycbcrInfo.conversion
+          if conversion in SamplerYcbcrConversions {
+            sampler.YcbcrConversion = SamplerYcbcrConversions[conversion]
+          }
+        }
+        case VK_STRUCTURE_TYPE_SAMPLER_CUSTOM_BORDER_COLOR_CREATE_INFO_EXT: {
+          ext := as!VkSamplerCustomBorderColorCreateInfoEXT*(next.Ptr)[0]
+          sampler.CustomBorderColorInfo = new!SamplerCustomBorderColorCreateInfoEXT(
+            CustomBorderColor: ext.customBorderColor,
+            Format: ext.format,
+          )
+        }
+        case VK_STRUCTURE_TYPE_SAMPLER_REDUCTION_MODE_CREATE_INFO: {
+          ext := as!VkSamplerReductionModeCreateInfo*(next.Ptr)[0]
+          sampler.SamplerReductionModeCreateInfo = new!SamplerReductionModeCreateInfo(
+            ReductionMode: ext.reductionMode,
+          )
+        }
+      }
+      next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+    }
+  }
+  handle := ?
+  if pSampler == null { vkErrorNullPointer("VkSampler") }
+  pSampler[0] = handle
+  sampler.VulkanHandle = handle
+  Samplers[handle] = sampler
+  return ?
+}
+
+@indirect("VkDevice")
+cmd void vkDestroySampler(
+    VkDevice            device,
+    VkSampler           sampler,
+    AllocationCallbacks pAllocator) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if sampler in Samplers {
+    obj := Samplers[sampler]
+    if obj != null {
+      for _, vkDesSet, bindingAndIndices in obj.DescriptorUsers {
+        if vkDesSet in DescriptorSets {
+          desSetObj := DescriptorSets[vkDesSet]
+          for _, binding, indices in bindingAndIndices {
+            if binding in desSetObj.Bindings {
+              switch desSetObj.Bindings[binding].BindingType {
+                case VK_DESCRIPTOR_TYPE_SAMPLER,
+                  VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
+                  for _, index, _ in indices {
+                    if desSetObj.Bindings[binding].ImageBinding[index].Sampler == sampler {
+                      desSetObj.Bindings[binding].ImageBinding[index].Sampler = as!VkSampler(0)
+                    }
+                  }
+                }
+                default: {
+                  // do nothing
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    delete(Samplers, sampler)
+  }
+}
+
+sub bool isEntireSubresource(ref!ImageObject image, VkImageSubresourceRange rng) {
+  layerCount := imageSubresourceLayerCount(image, rng)
+  levelCount := imageSubresourceLevelCount(image, rng)
+  return ((as!u32(image.ImageAspect) & as!u32(rng.aspectMask)) == as!u32(image.ImageAspect)) &&
+          (rng.baseArrayLayer == 0) && (rng.baseMipLevel == 0) &&
+          (layerCount == image.Info.ArrayLayers) && (levelCount == image.Info.MipLevels)
+}
+
+sub void updateImageQueue(ref!ImageObject image, VkImageSubresourceRange rng) {
+  if (image.LastBoundQueue != LastBoundQueue) {
+    if (isEntireSubresource(image, rng)) {
+      image.LastBoundQueue = LastBoundQueue
+      setQueueInRange(image, rng, LastBoundQueue)
+    } else {
+      setQueueInRange(image, rng, LastBoundQueue)
+      image.LastBoundQueue = null
+    }
+  }
+}
+
+sub void setQueueInRange(ref!ImageObject image, VkImageSubresourceRange rng,
+    ref!QueueObject queue) {
+  layerCount := imageSubresourceLayerCount(image, rng)
+  levelCount := imageSubresourceLevelCount(image, rng)
+  for _ , _ , aspectBit in unpackImageAspectFlags(image, rng.aspectMask) {
+    if aspectBit in image.Aspects {
+      layers := image.Aspects[aspectBit].Layers
+      for _, i, layer in  layers {
+        if (i >= rng.baseArrayLayer) && (i < rng.baseArrayLayer + layerCount) {
+          for _, k, level in layer.Levels {
+            if (k >= rng.baseMipLevel) && (k < rng.baseMipLevel + levelCount) {
+              level.LastBoundQueue = queue
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+sub u32 imageSubresourceLayerCount(ref!ImageObject image, VkImageSubresourceRange rng) {
+  return switch (rng.layerCount == VK_REMAINING_ARRAY_LAYERS) {
+    case true:
+      image.Info.ArrayLayers - rng.baseArrayLayer
+    case false:
+      switch ((rng.layerCount + rng.baseArrayLayer) > image.Info.ArrayLayers) {
+        case true:
+          image.Info.ArrayLayers - rng.baseArrayLayer
+        case false:
+          rng.layerCount
+      }
+  }
+}
+
+sub u32 imageSubresourceLevelCount(ref!ImageObject image, VkImageSubresourceRange rng) {
+  return switch (rng.levelCount == VK_REMAINING_MIP_LEVELS) {
+    case true:
+      image.Info.MipLevels - rng.baseMipLevel
+    case false:
+      switch ((rng.levelCount + rng.baseMipLevel) > image.Info.MipLevels) {
+        case true:
+          image.Info.MipLevels - rng.baseMipLevel
+        case false:
+          rng.levelCount
+      }
+  }
+}
+
+sub void transitionImageLayout(ref!ImageObject img, VkImageSubresourceRange rng, VkImageLayout oldLayout, VkImageLayout newLayout) {
+  layerCount := imageSubresourceLayerCount(img, rng)
+  levelCount := imageSubresourceLevelCount(img, rng)
+  for _ , _ , aspectBit in unpackImageAspectFlags(img, rng.aspectMask) {
+    if (aspectBit in img.Aspects) {
+      aspects := img.Aspects[aspectBit]
+      for layer in (rng.baseArrayLayer .. rng.baseArrayLayer + layerCount) {
+        if (layer in aspects.Layers) {
+          ll := aspects.Layers[layer]
+          for level in (rng.baseMipLevel .. rng.baseMipLevel + levelCount) {
+            if (level in ll.Levels) {
+              imgLevel := ll.Levels[level]
+              imgLevel.Layout = newLayout
+              imgLevel.LastBoundQueue = LastBoundQueue
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+sub void transitionImageViewLayout(
+    ref!ImageViewObject view,
+    VkImageLayout oldLayout,
+    VkImageLayout newLayout) {
+  if view != null {
+    if is2DView3DImage(view) {
+      rng := VkImageSubresourceRange(
+        aspectMask: view.SubresourceRange.aspectMask,
+        baseMipLevel: view.SubresourceRange.baseMipLevel,
+        levelCount: view.SubresourceRange.levelCount,
+        baseArrayLayer: 0,
+        layerCount: 1)
+      transitionImageLayout(
+        view.Image, rng, oldLayout, newLayout)
+    } else {
+      transitionImageLayout(
+        view.Image, view.SubresourceRange, oldLayout, newLayout)
+    }
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Vulkan 1.1 Core
+// ----------------------------------------------------------------------------
+
+@internal
+class MutablePlane {
+  VkImageAspectFlagBits aspect
+}
+
+///////////
+// Image //
+///////////
+sub void BindImageMemory2(
+    VkDevice                     device,
+    u32                          bindInfoCount,
+    const VkBindImageMemoryInfo* pBindInfos) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if pBindInfos == null {
+    vkErrorNullPointer("VkBindImageMemoryInfo(KHR)")
+  } else {
+    p := MutablePlane(as!VkImageAspectFlagBits(0))
+    infos := pBindInfos[0:bindInfoCount]
+    for i in (0 .. bindInfoCount) {
+      dg := MutableImageDeviceGroupBinding()
+      info := infos[i]
+      // handle pNext
+      if info.pNext != null {
+        numPNext := numberOfPNext(info.pNext)
+        next := MutableVoidPtr(as!void*(info.pNext))
+        for i in (0 .. numPNext) {
+          sType := as!const VkStructureType*(next.Ptr)[0]
+          switch sType {
+            case VK_STRUCTURE_TYPE_BIND_IMAGE_PLANE_MEMORY_INFO: {
+              ext := as!VkBindImagePlaneMemoryInfo*(next.Ptr)[0]
+              p.aspect = ext.planeAspect
+            }
+            case VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_DEVICE_GROUP_INFO: {
+              ext := as!VkBindImageMemoryDeviceGroupInfo*(next.Ptr)[0]
+              dg.Binding = new!ImageDeviceGroupBinding()
+              indices := ext.pDeviceIndices[0:ext.deviceIndexCount]
+              for j in (0 .. ext.deviceIndexCount) {
+                dg.Binding.Bindings[j] = indices[j]
+              }
+              regions := ext.pSplitInstanceBindRegions[0:ext.splitInstanceBindRegionCount]
+              for j in (0 .. ext.splitInstanceBindRegionCount) {
+                dg.Binding.SplitInstanceBindings[j] = regions[j]
+              }
+            }
+          }
+          next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+        }
+      }
+      BindImageMemory(info.image, info.memory, info.memoryOffset, p.aspect, dg.Binding)
+    }
+  }
+}
+
+@since("1.1")
+@indirect("VkDevice")
+cmd VkResult vkBindImageMemory2(
+    VkDevice                     device,
+    u32                          bindInfoCount,
+    const VkBindImageMemoryInfo* pBindInfos) {
+  BindImageMemory2(device, bindInfoCount, pBindInfos)
+  return ?
+}
+
+/////////////
+// Sampler //
+/////////////
+
+@internal class SamplerYcbcrConversionObject {
+  @unused VkSamplerYcbcrConversion      VulkanHandle
+  @unused VkDevice                      Device
+  @unused VkFormat                      Format
+  @unused VkSamplerYcbcrModelConversion YcbcrModel
+  @unused VkSamplerYcbcrRange           YcbcrRange
+  @unused VkComponentMapping            Components
+  @unused VkChromaLocation              XChromaOffset
+  @unused VkChromaLocation              YChromaOffset
+  @unused VkFilter                      ChromaFilter
+  @unused VkBool32                      ForceExplicitReconstruction
+  @unused bool                          IsFromExtension
+  @unused u64                           AndroidExternalFormat
+  @unused ref!VulkanDebugMarkerInfo     DebugInfo
+}
+
+sub void CreateSamplerYcbcrConversion(
+  VkDevice                                  device,
+  const VkSamplerYcbcrConversionCreateInfo* pCreateInfo,
+  const VkAllocationCallbacks*              pAllocator,
+  VkSamplerYcbcrConversion*                 pYcbcrConversion,
+  bool isFromExtension) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  object := new!SamplerYcbcrConversionObject(Device: device)
+  if pCreateInfo == null {
+    vkErrorNullPointer("VkSamplerYcbcrConversionCreateInfo(KHR)")
+  } else {
+    createInfo := pCreateInfo[0]
+    object.Format = createInfo.format
+    object.YcbcrModel = createInfo.ycbcrModel
+    object.YcbcrRange = createInfo.ycbcrRange
+    object.Components = createInfo.components
+    object.XChromaOffset = createInfo.xChromaOffset
+    object.YChromaOffset = createInfo.yChromaOffset
+    object.ChromaFilter = createInfo.chromaFilter
+    object.ForceExplicitReconstruction = createInfo.forceExplicitReconstruction
+    object.IsFromExtension = isFromExtension
+
+    if createInfo.pNext != null {
+      numPNext := numberOfPNext(createInfo.pNext)
+      next := MutableVoidPtr(as!void*(createInfo.pNext))
+      for i in (0 .. numPNext) {
+        sType := as!const VkStructureType*(next.Ptr)[0]
+        switch (sType) {
+          case VK_STRUCTURE_TYPE_EXTERNAL_FORMAT_ANDROID: {
+            ext := as!VkExternalFormatANDROID*(next.Ptr)[0]
+            object.AndroidExternalFormat = ext.externalFormat
+          }
+        }
+        next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+      }
+    }
+  }
+  fence
+  pYcbcrConversion[0] = ?
+  handle := pYcbcrConversion[0]
+  object.VulkanHandle = handle
+  SamplerYcbcrConversions[handle] = object
+}
+
+@since("1.1")
+@indirect("VkDevice")
+cmd VkResult vkCreateSamplerYcbcrConversion(
+    VkDevice                                    device,
+    const VkSamplerYcbcrConversionCreateInfo*   pCreateInfo,
+    const VkAllocationCallbacks*                pAllocator,
+    VkSamplerYcbcrConversion*                   pYcbcrConversion) {
+  CreateSamplerYcbcrConversion(
+      device, pCreateInfo, pAllocator, pYcbcrConversion, false)
+  return ?
+}
+
+sub void DestroySamplerYcbcrConversion(
+    VkDevice                      device,
+    VkSamplerYcbcrConversion      ycbcrConversion,
+    const VkAllocationCallbacks*  pAllocator) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if ycbcrConversion in SamplerYcbcrConversions {
+    delete(SamplerYcbcrConversions, ycbcrConversion)
+  }
+}
+
+@since("1.1")
+@indirect("VkDevice")
+cmd void vkDestroySamplerYcbcrConversion(
+    VkDevice                                    device,
+    VkSamplerYcbcrConversion                    ycbcrConversion,
+    const VkAllocationCallbacks*                pAllocator) {
+  DestroySamplerYcbcrConversion(device, ycbcrConversion, pAllocator)
+}
+
+///////////
+// Utils //
+///////////
+
+sub bool isDisjointImage(ref!ImageObject img) {
+  return (as!u32(img.Info.Flags) & as!u32(VK_IMAGE_CREATE_DISJOINT_BIT)) != as!u32(0)
+}
+
+sub VkImageAspectFlagBits getAspectBitsFromImageFormat(VkFormat fmt) {
+  return switch fmt {
+    // Depth only
+    case VK_FORMAT_D16_UNORM,
+        VK_FORMAT_X8_D24_UNORM_PACK32,
+        VK_FORMAT_D32_SFLOAT:
+      VK_IMAGE_ASPECT_DEPTH_BIT
+    // Stencil only
+    case VK_FORMAT_S8_UINT:
+      VK_IMAGE_ASPECT_STENCIL_BIT
+    // Depth and stencil
+    case VK_FORMAT_D16_UNORM_S8_UINT,
+        VK_FORMAT_D24_UNORM_S8_UINT,
+        VK_FORMAT_D32_SFLOAT_S8_UINT:
+      VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
+    // Multi-planar
+    case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM_KHR,
+        VK_FORMAT_G8_B8_R8_3PLANE_422_UNORM_KHR,
+        VK_FORMAT_G8_B8_R8_3PLANE_444_UNORM_KHR,
+        VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_420_UNORM_3PACK16_KHR,
+        VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_422_UNORM_3PACK16_KHR,
+        VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_444_UNORM_3PACK16_KHR,
+        VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_420_UNORM_3PACK16_KHR,
+        VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_422_UNORM_3PACK16_KHR,
+        VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_444_UNORM_3PACK16_KHR,
+        VK_FORMAT_G16_B16_R16_3PLANE_420_UNORM_KHR,
+        VK_FORMAT_G16_B16_R16_3PLANE_422_UNORM_KHR,
+        VK_FORMAT_G16_B16_R16_3PLANE_444_UNORM_KHR:
+      VK_IMAGE_ASPECT_PLANE_0_BIT | VK_IMAGE_ASPECT_PLANE_1_BIT | VK_IMAGE_ASPECT_PLANE_2_BIT
+
+    case VK_FORMAT_G8_B8R8_2PLANE_422_UNORM_KHR,
+        VK_FORMAT_G8_B8R8_2PLANE_420_UNORM_KHR,
+        VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16_KHR,
+        VK_FORMAT_G10X6_B10X6R10X6_2PLANE_422_UNORM_3PACK16_KHR,
+        VK_FORMAT_G12X4_B12X4R12X4_2PLANE_420_UNORM_3PACK16_KHR,
+        VK_FORMAT_G12X4_B12X4R12X4_2PLANE_422_UNORM_3PACK16_KHR,
+        VK_FORMAT_G16_B16R16_2PLANE_420_UNORM_KHR,
+        VK_FORMAT_G16_B16R16_2PLANE_422_UNORM_KHR:
+      VK_IMAGE_ASPECT_PLANE_0_BIT | VK_IMAGE_ASPECT_PLANE_1_BIT
+    // Others
+    default:
+      VK_IMAGE_ASPECT_COLOR_BIT
+  }
+}
+
+sub ref!ImagePlaneMemoryInfo getImagePlaneMemoryInfo(ref!ImageObject img, VkImageAspectFlagBits plane) {
+  disjoint := isDisjointImage(img)
+  return switch disjoint {
+    case true:
+      img.PlaneMemoryInfo[plane]
+    default:
+      img.PlaneMemoryInfo[as!VkImageAspectFlagBits(0)]
+  }
+}

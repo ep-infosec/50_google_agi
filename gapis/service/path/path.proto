@@ -1,0 +1,608 @@
+// Copyright (C) 2017 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+import "core/image/image.proto";
+import "gapis/service/box/box.proto";
+import "gapis/vertex/vertex.proto";
+
+package path;
+option java_package = "com.google.gapid.proto.service.path";
+option java_outer_classname = "Path";
+option go_package = "github.com/google/gapid/gapis/service/path";
+
+// Any is a oneof union of all the path types.
+message Any {
+  oneof path {
+    API API = 1;
+    ArrayIndex array_index = 2;
+    As as = 3;
+    Blob blob = 4;
+    Capture capture = 5;
+    Command command = 6;
+    Commands commands = 7;
+    CommandTree command_tree = 8;
+    CommandTreeNode command_tree_node = 9;
+    CommandTreeNodeForCommand command_tree_node_for_command = 10;
+    ConstantSet constant_set = 11;
+    Device device = 14;
+    DeviceTraceConfiguration traceConfig = 15;
+    FramebufferObservation FBO = 17;
+    FramebufferAttachments framebuffer_attachments = 18;
+    FramebufferAttachment framebuffer_attachment = 19;
+    Field field = 20;
+    GlobalState global_state = 21;
+    ImageInfo image_info = 22;
+    MapIndex map_index = 23;
+    Memory memory = 24;
+    MemoryAsType memoryAsType = 25;
+    Mesh mesh = 26;
+    Metrics metrics = 27;
+    Messages messages = 28;
+    MultiResourceData multi_resource_data = 29;
+    Parameter parameter = 30;
+    Pipelines pipelines = 31;
+    Report report = 32;
+    ResourceData resource_data = 33;
+    Resources resources = 34;
+    Result result = 35;
+    Slice slice = 36;
+    State state = 37;
+    StateTree state_tree = 38;
+    StateTreeNode state_tree_node = 39;
+    StateTreeNodeForPath state_tree_node_for_path = 40;
+    Stats stats = 41;
+    Thumbnail thumbnail = 42;
+    Type type = 43;
+    Framegraph framegraph = 44;
+    ResourceExtras resource_extras = 45;
+  }
+}
+
+// ID is a 20-byte identifier.
+message ID {
+  bytes data = 1;
+}
+
+// ArrayIndex is path to a element in an array or slice.
+message ArrayIndex {
+  uint64 index = 1;
+  oneof array {
+    Field field = 2;
+    Slice slice = 3;
+    ArrayIndex array_index = 4;
+    MapIndex map_index = 5;
+    Report report = 6;
+    Parameter parameter = 7;
+  }
+}
+
+// API is a path to an API.
+message API {
+  ID ID = 1;
+}
+
+// As casts or transforms the object to the requested type.
+message As {
+  oneof to {
+    image.Format image_format = 1;
+    vertex.BufferFormat vertex_buffer_format = 2;
+  }
+  oneof from {
+    Field field = 3;
+    Slice slice = 4;
+    ArrayIndex array_index = 5;
+    MapIndex map_index = 6;
+    ImageInfo image_info = 7;
+    ResourceData resource_data = 8;
+    Mesh mesh = 9;
+  }
+}
+
+// Blob is a path to a blob of data.
+message Blob {
+  // id is the identifier of the data.
+  ID ID = 1;
+}
+
+// Capture is a path to a capture.
+// Resolves to a service.Capture.
+message Capture {
+  ID ID = 1;
+  // Whether to exclude the memory ranges when fetching this capture.
+  bool exclude_memory_ranges = 2;
+}
+
+// Command is the path to a command in the capture.
+// Resolves to a service.Command.
+message Command {
+  Capture capture = 1;
+  // Indices of this command in the capture.
+  // If there is more than one index, then the index refers to a sub-command.
+  repeated uint64 indices = 2;
+}
+
+// Commands is a path to a list of commands in a capture.
+// Resolves to a service.Commands.
+message Commands {
+  Capture capture = 1;
+  // The index of the first command in the interval.
+  // If there is more than one index, then the index refers to a sub-command.
+  repeated uint64 from = 2;
+  // The index of the last command in the interval.
+  // If there is more than one index, then the index refers to a sub-command.
+  repeated uint64 to = 4;
+}
+
+// ConstantSet is a path to an enumerator of constants.
+// Resolves to a service.ConstantSet.
+message ConstantSet {
+  API API = 1;
+  int32 index = 2;
+}
+
+// Parameter is the path to a single parameter on a command.
+message Parameter {
+  string name = 1;
+  Command command = 2;
+}
+
+// Type is the path to a type used in an API.
+message Type {
+  uint64 type_index = 1;
+  API API = 2;
+}
+
+// Result is the path to the result value of a command.
+message Result {
+  Command command = 1;
+}
+
+// Threads is path to a list of threads in a capture.
+message Threads {
+  Capture capture = 1;
+}
+
+// Thread is a path to a single thread in a capture.
+message Thread {
+  Capture capture = 1;
+  uint64 ID = 2;
+}
+
+// Messages is path to a list of messages stored in the capture
+message Messages {
+  Capture capture = 1;
+}
+
+// Device is a path to a device used for replay.
+message Device {
+  ID ID = 1;
+}
+
+// DeviceTraceConfiguration is a path to the tracing config for a device
+message DeviceTraceConfiguration {
+  Device device = 1;
+}
+
+// FramebufferObservation is a path to a framebuffer observation image at the
+// specified command. It resolves to an image.Info.
+message FramebufferObservation {
+  Command command = 1;
+}
+
+// UsageHints hints to the server the intended usage of the result of a request.
+// This can be used to improve performance and responsiveness of the RPCs.
+message UsageHints {
+  // Preview indicates that the request has been made for a thumbnail or
+  // low-quality representation of the underlying data. Previews are considered
+  // non-critical and non-urgent; the server may consider scheduling other work
+  // ahead of previews, and possibly delay the processing of the request to
+  // batch together requests.
+  bool preview = 1;
+
+  // Primary indicates that the request has been made for the primary view.
+  // Primary requests are prioritized and are low-latency.
+  bool primary = 2;
+
+  // Background indicates that this request is non-critical, non-urgent and
+  // should process in the background. All other non-background processes should
+  // be considered more urgent. Background requests may be interrupted for
+  // non-background requests.
+  bool background = 3;
+}
+
+// DrawMode is an enumerator of draw modes that can be used by RenderSettings.
+enum DrawMode {
+  // NORMAL indicates that the draw calls should be rendered as usual
+  NORMAL = 0;
+  // WIREFRAME_OVERLAY indicates that the single draw call should be overlayed
+  // with the wireframe of the mesh.
+  WIREFRAME_OVERLAY = 1;
+  // WIREFRAME_ALL indicates that all draw calls should be displayed in
+  // wireframe.
+  WIREFRAME_ALL = 2;
+  // OVERDRAW indicates that the draw calls should render their overdraw counts
+  // instead of colours.
+  OVERDRAW = 3;
+}
+
+// RenderSettings contains settings and flags to be used in replaying and
+// returning a bound render target's color buffer.
+message RenderSettings {
+  // The desired maximum width of the image. The returned image may be larger
+  // than this.
+  uint32 max_width = 1;
+  // The desired minimum height of the image. The returned image may be larger
+  // than this.
+  uint32 max_height = 2;
+  // The draw mode to use when rendering.
+  DrawMode draw_mode = 3;
+  bool disable_replay_optimization = 4;
+  bool display_to_surface = 5;
+}
+
+message FramebufferAttachment {
+  Command after = 1;
+  uint32 index = 2;
+  RenderSettings render_settings = 3;
+  UsageHints hints = 4;
+}
+
+message FramebufferAttachments {
+  Command after = 1;
+}
+
+// Field is a path to a field in a struct.
+message Field {
+  string name = 1;
+  oneof struct {
+    Field field = 2;
+    Slice slice = 3;
+    ArrayIndex array_index = 4;
+    MapIndex map_index = 5;
+    State state = 6;
+    GlobalState global_state = 7;
+    Parameter parameter = 8;
+  }
+}
+
+message Framegraph {
+  Capture capture = 1;
+}
+
+// CommandFilter are the optional filters applied to CommandTrees.
+message CommandFilter {
+  // thread filters the commands to those with the specified threads.
+  repeated uint64 threads = 2;
+
+  // If true, only shows draw calls from inside a command buffer
+  bool only_executed_draws = 3;
+
+  // If true, do not include host commands in results
+  bool suppress_host_commands = 4;
+
+  // If true, do not include begin and end markets in results
+  bool suppress_begin_end_markers = 5;
+
+  // If true, do not include synchronisation commands in results
+  bool suppress_device_side_sync_commands = 6;
+
+  // If true, only shows end of frame commands
+  bool only_end_of_frames = 7;
+
+  // If true, only show frame buffer observations
+  bool only_framebuffer_observations = 8;
+}
+
+// CommandTree is a path to a hierarchy of command tree nodes.
+// Resolves to a service.CommandTree.
+message CommandTree {
+  // The capture to get the tree for.
+  Capture capture = 1;
+  // The command filter used to create the tree.
+  CommandFilter filter = 2;
+
+  // If true then commands will be grouped by draw calls.
+  bool group_by_draw_call = 6;
+  // If true then commands will be grouped by transform feedback calls.
+  bool group_by_transform_feedback = 7;
+  // If true then commands will be grouped by frame.
+  bool group_by_frame = 8;
+  // If true then commands will be grouped by user markers.
+  bool group_by_user_markers = 9;
+  // If true then commands will be grouped by submission.
+  bool group_by_submission = 10;
+  // If true, no tree nodes are created for submit infos.
+  bool suppress_submit_info_nodes = 15;
+  // If true and grouping by frames, commands after the last frame will be
+  // grouped into an 'incomplete frame' group. Only if there is at least one
+  // complete frame.
+  bool allow_incomplete_frame = 12;
+  // If positive, synthetic sub-nodes are created for nodes with more than
+  // this many children.
+  int32 max_children = 13;
+  // If positive, synthetic sub-nodes are created for long spans of commands
+  // between groups. This ensures the groups do not get lost in the noise.
+  int32 max_neighbours = 14;
+}
+
+// CommandTreeNode is a path to a command tree node.
+// Resolves to a service.CommandTreeNode.
+message CommandTreeNode {
+  // Unique identifier of the command tree.
+  ID tree = 1;
+  // Descending child indices starting from the root CommandTreeNode.
+  repeated uint64 indices = 2;
+}
+
+// CommandTreeNodeForCommand is a path to a command tree node, resolved from a
+// Command path and a CommandTree identifier. It is used to locate the
+// CommandTreeNode for a given command.
+// Resolves to a path.CommandTreeNode.
+message CommandTreeNodeForCommand {
+  // Unique identifier of the command tree.
+  ID tree = 1;
+  // The command path.
+  Command command = 2;
+  bool preferGroup = 3;
+}
+
+// ImageInfo is a path that refers to a image.Info.
+message ImageInfo {
+  image.ID ID = 1;  // The ImageInfo's unique identifier.
+}
+
+// MapIndex is a path to a value held inside a map.
+message MapIndex {
+  oneof key {
+    box.Value box = 1;
+  }
+  oneof map {
+    Field field = 2;
+    Slice slice = 3;
+    ArrayIndex array_index = 4;
+    MapIndex map_index = 5;
+    State state = 6;
+    Parameter parameter = 7;
+  }
+}
+
+// Memory is a path to a region of memory.
+// Resolves to a service.Memory.
+message Memory {
+  // Base address of the region of memory.
+  uint64 address = 1;
+  // Size in bytes of the region of memory.
+  uint64 size = 2;
+  // The pool identifier.
+  uint32 pool = 3;
+  // The memory follows this command.
+  Command after = 4;
+  // If true then the actual memory bytes will be missing from in the
+  // service.Memory. Useful for discovering memory ranges touched.
+  bool exclude_data = 5;
+  // If true, only the observations at the given command are included.
+  // I.e, the returned service.Memory.observed will be empty.
+  bool exclude_observed = 6;
+  // If true, also include the types of all memory observations
+  bool include_types = 7;
+}
+
+// MemoryAsType is a path to a particular piece of memory
+//  interpreted as a specific type
+// Resolves to a memory_box.Value.
+message MemoryAsType {
+  // Base address of the region of memory.
+  uint64 address = 1;
+  // Size the maximum size of memory to view. (0 for auto)
+  uint64 size = 2;
+  // The pool identifier.
+  uint32 pool = 3;
+  // The memory follows this command.
+  Command after = 4;
+  // The type to interpret this memory as
+  Type type = 5;
+}
+
+// Mesh is a path to a mesh representation of an object.
+message Mesh {
+  MeshOptions options = 1;
+  oneof object {
+    Command command = 2;
+    CommandTreeNode command_tree_node = 3;
+  }
+}
+
+// MeshOptions provides parameters for the mesh returned by a Mesh path resolve.
+message MeshOptions {
+  // If true then normals are calculated from each face.
+  bool faceted = 1;
+  // If true, the actual data will be missing from the vertex.Buffers. This
+  // can be used to fetch the metadata about the mesh and all its vertex
+  // buffers, without the overhead of fetching all the buffer data.
+  bool exclude_data = 2;
+  // Hints that override the semantic guessing. Maps vertex attribute names to
+  // their intentended semantic type.
+  message SemanticHint {
+    string name = 1;
+    vertex.Semantic.Type type = 2;
+  }
+  repeated SemanticHint vertex_semantics = 3;
+}
+
+// Metrics requests a set of metrics for a given command.  Resolves to
+// service.Metrics.
+message Metrics {
+  // The command after which to get the metrics from.
+  Command command = 1;
+
+  // Whether to get the memory breakdown metrics.
+  bool memory_breakdown = 2;
+}
+
+// Pipelines requests the currently bound pipelines for a given command.
+message Pipelines {
+  // The object at which to get the pipelines.
+  oneof object {
+    Command command = 1;
+    CommandTreeNode command_tree_node = 2;
+  }
+}
+
+// Report is a path to a list of report items for a capture.
+message Report {
+  Capture capture = 1;
+  // The optional path to the device used to generate replay information.
+  Device device = 2;
+  // Whether to display the replay to the original surface while in progress.
+  bool display_to_surface = 4;
+}
+
+// ResourceType is an enumerator of resource types.
+enum ResourceType {
+  // Unknown represents an unknown resource type
+  Unknown = 0;
+  // Texture represents the Texture resource type
+  Texture = 1;
+  // Shader represents the Shader resource type
+  Shader = 2;
+  // Pipeline respresents the Pipeline resource type
+  Pipeline = 3;
+}
+
+// Resources is a path to a list of resources used in a capture.
+message Resources {
+  Capture capture = 1;
+}
+
+// ResourceData is a path to a single resource snapshot at a given point in an
+// command stream.
+message ResourceData {
+  ID ID = 1;
+  Command after = 2;
+}
+
+// ResourceExtras is a path to extra data for a single resource at a given point
+// in an command stream.
+message ResourceExtras {
+  ID ID = 1;
+  Command after = 2;
+}
+
+// MultiResourceData is a path to a set of resource snapshots at a given point
+// in a command stream.
+message MultiResourceData {
+  Command after = 1;
+  repeated ID IDs = 2;
+  // Whether an empty list of IDs means all resources of a given type.
+  // Only supported by Get().
+  bool all = 3;
+  ResourceType type = 4;
+}
+
+// Slice is a path to a subslice of a slice or array.
+message Slice {
+  uint64 start = 1;
+  uint64 end = 2;
+  oneof array {
+    Field field = 3;
+    Slice slice = 4;
+    ArrayIndex array_index = 5;
+    MapIndex map_index = 6;
+    Parameter parameter = 7;
+  }
+}
+
+// State is a path to a subset of the GlobalState at a point in a capture.
+message State {
+  Command after = 1;
+}
+
+// GlobalState is an path node to the absolute global state after a specfied
+// command. GlobalStates are used where stable paths are required, such as
+// locating state tree nodes.
+message GlobalState {
+  path.Command after = 1;
+}
+
+// StateTree is a path to a hierarchy of state tree nodes.
+// Resolves to a service.StateTree.
+message StateTree {
+  State state = 1;
+  // If positive, expanded arrays/slices with more elements than this limit
+  // will be restructured to have up to two extra levels of tree nodes, each
+  // with at most this many children. If the array has more elements than this
+  // number cubed, the array root node will contain more than this many child
+  // nodes.
+  int32 array_group_size = 2;
+}
+
+// StateTreeNode is a path to a state tree node.
+// Resolves to a service.StateTreeNode.
+message StateTreeNode {
+  // Unique identifier of the state tree.
+  ID tree = 1;
+  // Descending child indices starting from the root StateTreeNode.
+  repeated uint64 indices = 2;
+}
+
+// StateTreeNodeForPath is a path to a state tree node, resolved from another
+// path. It is used to locate the relevant StateTreeNode for a path to a state
+// member variable.
+// Resolves to a path.StateTreeNode.
+message StateTreeNodeForPath {
+  // Unique identifier of the state tree.
+  ID tree = 1;
+  // The path to the state member to look for.
+  Any member = 2;
+}
+
+// Stats requests statistics for a given capture.  Resolves to service.Stats.
+message Stats {
+  // The capture to analyze
+  Capture capture = 1;
+
+  // Whether to compute draw calls per frame statistics
+  bool draw_call = 2;
+  // Whether to compute submissions per frame statistics
+  bool submission = 3;
+}
+
+// Thumbnail is a path to a thumbnail image representing the object.
+message Thumbnail {
+  // The desired maximum width of the thumbnail image.
+  // If DesiredMaxWidth <= 0, then no limits will be placed on the width.
+  uint32 desired_max_width = 1;
+  // The desired maximum height of the thumbnail image.
+  // If DesiredMaxHeight <= 0, then no limits will be placed on the height.
+  uint32 desired_max_height = 2;
+  // If requested thumbnail format. If nil, then return the native format.
+  image.Format desired_format = 3;
+
+  oneof object {
+    ResourceData resource = 4;
+    MultiResourceData resources = 9;
+    Command command = 5;
+    CommandTreeNode command_tree_node = 6;
+    FramebufferAttachment framebuffer_attachment = 7;
+  }
+
+  bool disable_optimization = 8;
+}
+
+message ResolveConfig {
+  // The device to use for any replays when resolving paths.
+  path.Device replay_device = 1;
+}

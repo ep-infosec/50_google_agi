@@ -1,0 +1,716 @@
+// Copyright (C) 2018 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Based off of the original vulkan.h header file which has the following
+// license.
+
+// Copyright (c) 2015 The Khronos Group Inc.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and/or associated documentation files (the
+// "Materials"), to deal in the Materials without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Materials, and to
+// permit persons to whom the Materials are furnished to do so, subject to
+// the following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Materials.
+//
+// THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+// MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+
+///////////
+// Fence //
+///////////
+
+@internal class FenceObject {
+  @unused VkDevice                  Device
+  @unused VkFence                   VulkanHandle
+  @unused bool                      Signaled
+  @unused ref!VulkanDebugMarkerInfo DebugInfo
+}
+
+@indirect("VkDevice")
+@sync_command
+cmd VkResult vkCreateFence(
+    VkDevice                     device,
+    const VkFenceCreateInfo*     pCreateInfo,
+    AllocationCallbacks          pAllocator,
+    VkFence*                     pFence) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if pCreateInfo == null { vkErrorNullPointer("VkFenceCreateInfo") }
+  f := new!FenceObject()
+  create_info := pCreateInfo[0]
+  // handle pNext
+  if create_info.pNext != null {
+    numPNext := numberOfPNext(create_info.pNext)
+    next := MutableVoidPtr(as!void*(create_info.pNext))
+    for i in (0 .. numPNext) {
+      sType := as!const VkStructureType*(next.Ptr)[0]
+      switch (sType) {
+      }
+      next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+    }
+  }
+
+  f.Device = device
+
+  if ((as!u32(create_info.flags) & as!u32(VK_FENCE_CREATE_SIGNALED_BIT)) != 0) {
+    f.Signaled = true
+  } else {
+    f.Signaled = false
+  }
+  handle := ?
+  if pFence == null { vkErrorNullPointer("VkFence") }
+  pFence[0] = handle
+  f.VulkanHandle = handle
+  Fences[handle] = f
+  return ?
+}
+
+@indirect("VkDevice")
+@sync_command
+cmd void vkDestroyFence(
+    VkDevice                     device,
+    VkFence                      fence,
+    AllocationCallbacks          pAllocator) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  delete(Fences, fence)
+}
+
+@indirect("VkDevice")
+@sync_command
+cmd VkResult vkResetFences(
+    VkDevice       device,
+    u32            fenceCount,
+    const VkFence* pFences) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  fences := pFences[0:fenceCount]
+  for i in (0 .. fenceCount) {
+    f := fences[i]
+    if !(f in Fences) { vkErrorInvalidFence(fences[i]) }
+    Fences[f].Signaled = false
+    recordFenceReset(f)
+  }
+  return ?
+}
+
+@indirect("VkDevice")
+@sync_command
+@custom
+cmd VkResult vkGetFenceStatus(
+    VkDevice device,
+    VkFence  fence) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if !(fence in Fences) { vkErrorInvalidFence(fence) }
+  res := ?
+  if res == VK_SUCCESS {
+    // The fence was signaled, so treat this as a wait on the fence.
+    if Fences[fence].Signaled {
+      recordFenceWait(fence)
+    } else {
+      // TODO: handle case when signal comes after wait (e.g. in a multi-threaded app)
+      vkErrorInvalidFence(fence)
+    }
+  }
+  return res
+}
+
+@indirect("VkDevice")
+@sync_command
+@threadsafe
+@alive
+@custom
+cmd VkResult vkWaitForFences(
+    VkDevice       device,
+    u32            fenceCount,
+    const VkFence* pFences,
+    VkBool32       waitAll,
+    u64            timeout) { /// timeout in nanoseconds
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  fences := pFences[0:fenceCount]
+  for i in (0 .. fenceCount) {
+    f := fences[i]
+    if !(f in Fences) { vkErrorInvalidFence(fences[i]) }
+    if Fences[f].Signaled {
+      recordFenceWait(f)
+    } else {
+      // TODO: handle case when signal comes after wait (e.g. in a multi-threaded app)
+      vkErrorInvalidFence(f)
+    }
+  }
+  fence
+  recordWaitedFences(device, fenceCount, pFences)
+  return ?
+}
+
+///////////////
+// Semaphore //
+///////////////
+
+@internal class SemaphoreObject {
+  @unused VkDevice                           Device
+  @unused VkSemaphore                        VulkanHandle
+  @unused VkQueue                            LastQueue
+  @unused s32                                SubmitCount
+  @unused bool                               Signaled
+  @unused ref!VulkanDebugMarkerInfo          DebugInfo
+  @unused VkQueue                            WaitingQueue
+  @unused VkExternalSemaphoreHandleTypeFlags ExternalHandleTypeFlags
+}
+
+@indirect("VkDevice")
+@sync_command
+cmd VkResult vkCreateSemaphore(
+    VkDevice                     device,
+    const VkSemaphoreCreateInfo* pCreateInfo,
+    AllocationCallbacks          pAllocator,
+    VkSemaphore*                 pSemaphore) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if pCreateInfo == null { vkErrorNullPointer("VkSemaphoreCreateInfo") }
+  if pSemaphore == null { vkErrorNullPointer("VkSemaphore") }
+  create_info := pCreateInfo[0]
+
+  semaphoreObject := new!SemaphoreObject(Device: device)
+  // handle pNext
+  if create_info.pNext != null {
+    numPNext := numberOfPNext(create_info.pNext)
+    next := MutableVoidPtr(as!void*(create_info.pNext))
+    for i in (0 .. numPNext) {
+      sType := as!const VkStructureType*(next.Ptr)[0]
+      switch (sType) {
+        case VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO: {
+          ext := as!VkExportSemaphoreCreateInfo*(next.Ptr)[0]
+          semaphoreObject.ExternalHandleTypeFlags = ext.handleTypes
+        }
+      }
+      next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+    }
+  }
+
+  handle := ?
+  pSemaphore[0] = handle
+  semaphoreObject.VulkanHandle = handle
+  Semaphores[handle] = semaphoreObject
+
+  return ?
+}
+
+@indirect("VkDevice")
+@sync_command
+cmd void vkDestroySemaphore(
+    VkDevice                     device,
+    VkSemaphore                  semaphore,
+    AllocationCallbacks          pAllocator) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  delete(Semaphores, semaphore)
+}
+
+// Partial implementation
+@sync_command
+@since("1.2")
+@indirect("VkDevice")
+cmd VkResult vkSignalSemaphore(
+    VkDevice                                    device,
+    const VkSemaphoreSignalInfo*                pSignalInfo) {
+  return VK_SUCCESS
+}
+
+// Partial implementation
+@sync_command
+@since("1.2")
+@indirect("VkDevice")
+cmd VkResult vkWaitSemaphores(
+    VkDevice                                    device,
+    const VkSemaphoreWaitInfo*                  pWaitInfo,
+    u64                                         timeout) {
+  return VK_SUCCESS
+}
+
+// Partial implementation
+@sync_command
+@since("1.2")
+@indirect("VkDevice")
+cmd VkResult vkGetSemaphoreCounterValue(
+    VkDevice                                    device,
+    VkSemaphore                                 semaphore,
+    u64*                                        pValue) {
+  return VK_SUCCESS
+}
+
+///////////
+// Event //
+///////////
+
+@internal class EventObject {
+  @unused VkDevice                  Device
+  @unused VkEvent                   VulkanHandle
+  @unused bool                      Signaled
+  @unused VkQueue                   SubmitQueue
+  @unused ref!VulkanDebugMarkerInfo DebugInfo
+}
+
+@indirect("VkDevice")
+@sync_command
+cmd VkResult vkCreateEvent(
+    VkDevice                     device,
+    const VkEventCreateInfo*     pCreateInfo,
+    AllocationCallbacks          pAllocator,
+    VkEvent*                     pEvent) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if pCreateInfo == null { vkErrorNullPointer("VkEventCreateInfo") }
+  create_info := pCreateInfo[0]
+  // handle pNext
+  if create_info.pNext != null {
+    numPNext := numberOfPNext(create_info.pNext)
+    next := MutableVoidPtr(as!void*(create_info.pNext))
+    for i in (0 .. numPNext) {
+      sType := as!const VkStructureType*(next.Ptr)[0]
+      switch (sType) {
+      }
+      next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+    }
+  }
+
+  event := new!EventObject()
+  event.Device = device
+  event.Signaled = false
+  event.SubmitQueue = as!VkQueue(0)
+  handle := ?
+  if pEvent == null { vkErrorNullPointer("VkEvent") }
+  pEvent[0] = handle
+  event.VulkanHandle = handle
+  Events[handle] = event
+  return ?
+}
+
+@indirect("VkDevice")
+@sync_command
+cmd void vkDestroyEvent(
+    VkDevice                     device,
+    VkEvent                      event,
+    AllocationCallbacks          pAllocator) {
+  delete(Events, event)
+}
+
+@indirect("VkDevice")
+@sync_command
+@custom
+cmd VkResult vkGetEventStatus(
+    VkDevice device,
+    VkEvent  event) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if !(event in Events) { vkErrorInvalidEvent(event) }
+  return ?
+}
+
+@indirect("VkDevice")
+@sync_command
+cmd VkResult vkSetEvent(
+    VkDevice device,
+    VkEvent  event) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if !(event in Events) { vkErrorInvalidEvent(event) }
+  e := Events[event]
+  e.Signaled = true
+  queue := e.SubmitQueue
+  if queue != as!VkQueue(0) {
+    q := Queues[queue]
+    if e.VulkanHandle in q.PendingEvents {
+      vkErrorUnsupported("Unsupported signal-after-submit events")
+    }
+  }
+  recordEventSet(event)
+  fence
+  return ?
+}
+
+@indirect("VkDevice")
+@sync_command
+cmd VkResult vkResetEvent(
+    VkDevice device,
+    VkEvent  event) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if !(event in Events) { vkErrorInvalidEvent(event) }
+  Events[event].Signaled = false
+  return ?
+}
+
+///////////////////////////////////
+// Event command buffer commands //
+///////////////////////////////////
+
+@internal class vkCmdSetEventArgs {
+  VkEvent              Event
+  VkPipelineStageFlags StageMask
+}
+
+sub void dovkCmdSetEvent(ref!vkCmdSetEventArgs event) {
+  evt := Events[event.Event]
+  evt.Signaled = true
+  evt.SubmitQueue = LastBoundQueue.VulkanHandle
+}
+
+@indirect("VkCommandBuffer", "VkDevice")
+@sync_command
+cmd void vkCmdSetEvent(
+    VkCommandBuffer      commandBuffer,
+    VkEvent              event,
+    VkPipelineStageFlags stageMask) {
+  if !(event in Events) { vkErrorInvalidEvent(event) }
+  args := new!vkCmdSetEventArgs(
+    Event:      event,
+    StageMask:  stageMask
+  )
+
+  if !(commandBuffer in CommandBuffers) {
+    vkErrorInvalidCommandBuffer(commandBuffer)
+  } else {
+    mapPos := as!u32(len(CommandBuffers[commandBuffer].BufferCommands.vkCmdSetEvent))
+    CommandBuffers[commandBuffer].BufferCommands.vkCmdSetEvent[mapPos] =
+    args
+
+    AddCommand(commandBuffer, cmd_vkCmdSetEvent, mapPos)
+  }
+}
+
+@internal class vkCmdResetEventArgs {
+  VkEvent              Event
+  VkPipelineStageFlags StageMask
+}
+
+sub void dovkCmdResetEvent(ref!vkCmdResetEventArgs event) {
+  evt := Events[event.Event]
+  evt.Signaled = false
+  evt.SubmitQueue = LastBoundQueue.VulkanHandle
+}
+
+@indirect("VkCommandBuffer", "VkDevice")
+@sync_command
+cmd void vkCmdResetEvent(
+    VkCommandBuffer      commandBuffer,
+    VkEvent              event,
+    VkPipelineStageFlags stageMask) {
+  if !(event in Events) { vkErrorInvalidEvent(event) }
+  args := new!vkCmdResetEventArgs(
+    Event:      event,
+    StageMask:  stageMask,
+  )
+
+  if !(commandBuffer in CommandBuffers) {
+    vkErrorInvalidCommandBuffer(commandBuffer)
+  } else {
+    mapPos := as!u32(len(CommandBuffers[commandBuffer].BufferCommands.vkCmdResetEvent))
+    CommandBuffers[commandBuffer].BufferCommands.vkCmdResetEvent[mapPos] =
+    args
+
+    AddCommand(commandBuffer, cmd_vkCmdResetEvent, mapPos)
+  }
+}
+
+@internal class vkCmdWaitEventsArgs {
+  map!(u32, VkEvent)               Events
+  VkPipelineStageFlags             SrcStageMask
+  VkPipelineStageFlags             DstStageMask
+  map!(u32, VkMemoryBarrier)       MemoryBarriers
+  map!(u32, VkBufferMemoryBarrier) BufferMemoryBarriers
+  map!(u32, VkImageMemoryBarrier)  ImageMemoryBarriers
+}
+
+
+sub void dovkCmdWaitEvents(ref!vkCmdWaitEventsArgs args) {
+  for _ , _ , e in args.Events {
+    if !(e in Events) { vkErrorInvalidEvent(e) }
+    event := Events[e]
+    event.SubmitQueue = LastBoundQueue.VulkanHandle
+    if event.Signaled != true {
+      LastBoundQueue.PendingEvents[e] = event
+      recordEventWait(e)
+      vkErrUnsupported("Unsupported, signal-after-submit events")
+    }
+  }
+  if len(LastBoundQueue.PendingEvents) == 0 {
+    processBarriers(args.SrcStageMask, args.DstStageMask,
+      args.MemoryBarriers, args.BufferMemoryBarriers, args.ImageMemoryBarriers)
+  }
+}
+
+@indirect("VkCommandBuffer", "VkDevice")
+@sync_command
+cmd void vkCmdWaitEvents(
+    VkCommandBuffer              commandBuffer,
+    u32                          eventCount,
+    const VkEvent*               pEvents,
+    VkPipelineStageFlags         srcStageMask,
+    VkPipelineStageFlags         dstStageMask,
+    u32                          memoryBarrierCount,
+    const VkMemoryBarrier*       pMemoryBarriers,
+    u32                          bufferMemoryBarrierCount,
+    const VkBufferMemoryBarrier* pBufferMemoryBarriers,
+    u32                          imageMemoryBarrierCount,
+    const VkImageMemoryBarrier*  pImageMemoryBarriers) {
+  if !(commandBuffer in CommandBuffers) {
+    vkErrorInvalidCommandBuffer(commandBuffer)
+  } else {
+    cb := CommandBuffers[commandBuffer]
+    args := new!vkCmdWaitEventsArgs(
+      SrcStageMask:  srcStageMask,
+      DstStageMask:  dstStageMask,
+    )
+    events := pEvents[0:eventCount]
+    handleMemoryBarriersPNext(pMemoryBarriers, memoryBarrierCount)
+    memoryBarriers := pMemoryBarriers[0:memoryBarrierCount]
+    handleBufferMemoryBarriersPNext(pBufferMemoryBarriers, bufferMemoryBarrierCount)
+    bufferMemoryBarriers := pBufferMemoryBarriers[0:bufferMemoryBarrierCount]
+    handleImageMemoryBarriersPNext(pImageMemoryBarriers, imageMemoryBarrierCount)
+    imageMemoryBarriers := pImageMemoryBarriers[0:imageMemoryBarrierCount]
+    for i in (0 .. eventCount) {
+      if !(events[i] in Events) { vkErrorInvalidEvent(events[i]) }
+      args.Events[i] = events[i]
+    }
+    for i in (0 .. memoryBarrierCount) {
+      args.MemoryBarriers[i] = memoryBarriers[i]
+    }
+    for i in (0 .. bufferMemoryBarrierCount) {
+      args.BufferMemoryBarriers[i] = bufferMemoryBarriers[i]
+    }
+    for i in (0 .. imageMemoryBarrierCount) {
+      args.ImageMemoryBarriers[i] = imageMemoryBarriers[i]
+      img := Images[args.ImageMemoryBarriers[i].image]
+      RecordLayoutTransition(cb,
+        img,
+        args.ImageMemoryBarriers[i].subresourceRange,
+        args.ImageMemoryBarriers[i].newLayout
+      )
+    }
+
+    mapPos := as!u32(len(cb.BufferCommands.vkCmdWaitEvents))
+    cb.BufferCommands.vkCmdWaitEvents[mapPos] =
+    args
+
+    AddCommand(commandBuffer, cmd_vkCmdWaitEvents, mapPos)
+  }
+}
+
+//////////////////////
+// Pipeline barrier //
+//////////////////////
+
+@internal class vkCmdPipelineBarrierArgs {
+  VkPipelineStageFlags             SrcStageMask        ,
+  VkPipelineStageFlags             DstStageMask        ,
+  VkDependencyFlags                DependencyFlags     ,
+  map!(u32, VkMemoryBarrier)       MemoryBarriers      ,
+  map!(u32, VkBufferMemoryBarrier) BufferMemoryBarriers,
+  map!(u32, VkImageMemoryBarrier)  ImageMemoryBarriers
+}
+
+sub void dovkCmdPipelineBarrier(ref!vkCmdPipelineBarrierArgs args) {
+  // TODO: Determine how DependencyFlags affect the state or dependency graph
+  processBarriers(args.SrcStageMask, args.DstStageMask,
+    args.MemoryBarriers, args.BufferMemoryBarriers, args.ImageMemoryBarriers)
+}
+
+sub void handleMemoryBarriersPNext(const VkMemoryBarrier* pBarriers, u32 count) {
+  barriers := pBarriers[0:count]
+  for i in (0 .. count) {
+    b := barriers[i]
+    // handle pNext
+    if b.pNext != null {
+      numPNext := numberOfPNext(b.pNext)
+      next := MutableVoidPtr(as!void*(b.pNext))
+      for i in (0 .. numPNext) {
+        sType := as!const VkStructureType*(next.Ptr)[0]
+        switch (sType) {
+        }
+        next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+      }
+    }
+  }
+}
+
+sub void handleBufferMemoryBarriersPNext(const VkBufferMemoryBarrier* pBarriers, u32 count) {
+  barriers := pBarriers[0:count]
+  for i in (0 .. count) {
+    b := barriers[i]
+    // handle pNext
+    if b.pNext != null {
+      numPNext := numberOfPNext(b.pNext)
+      next := MutableVoidPtr(as!void*(b.pNext))
+      for i in (0 .. numPNext) {
+        sType := as!const VkStructureType*(next.Ptr)[0]
+        switch (sType) {
+        }
+        next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+      }
+    }
+  }
+}
+
+sub void handleImageMemoryBarriersPNext(const VkImageMemoryBarrier* pBarriers, u32 count) {
+  barriers := pBarriers[0:count]
+  for i in (0 .. count) {
+    b := barriers[i]
+    // handle pNext
+    if b.pNext != null {
+      numPNext := numberOfPNext(b.pNext)
+      next := MutableVoidPtr(as!void*(b.pNext))
+      for i in (0 .. numPNext) {
+        sType := as!const VkStructureType*(next.Ptr)[0]
+        switch (sType) {
+        }
+        next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+      }
+    }
+  }
+}
+
+@indirect("VkCommandBuffer", "VkDevice")
+@sync_command
+cmd void vkCmdPipelineBarrier(
+    VkCommandBuffer              commandBuffer,
+    VkPipelineStageFlags         srcStageMask,
+    VkPipelineStageFlags         dstStageMask,
+    VkDependencyFlags            dependencyFlags,
+    u32                          memoryBarrierCount,
+    const VkMemoryBarrier*       pMemoryBarriers,
+    u32                          bufferMemoryBarrierCount,
+    const VkBufferMemoryBarrier* pBufferMemoryBarriers,
+    u32                          imageMemoryBarrierCount,
+    const VkImageMemoryBarrier*  pImageMemoryBarriers) {
+  if !(commandBuffer in CommandBuffers) {
+    vkErrorInvalidCommandBuffer(commandBuffer)
+  } else {
+    cb := CommandBuffers[commandBuffer]
+    args := new!vkCmdPipelineBarrierArgs(
+      SrcStageMask:     srcStageMask,
+      DstStageMask:     dstStageMask,
+      DependencyFlags:  dependencyFlags
+    )
+    handleMemoryBarriersPNext(pMemoryBarriers, memoryBarrierCount)
+    memoryBarriers := pMemoryBarriers[0:memoryBarrierCount]
+    for i in (0 .. memoryBarrierCount) {
+      args.MemoryBarriers[i] = memoryBarriers[i]
+    }
+
+    handleBufferMemoryBarriersPNext(pBufferMemoryBarriers, bufferMemoryBarrierCount)
+    bufferMemoryBarriers := pBufferMemoryBarriers[0:bufferMemoryBarrierCount]
+    for i in (0 .. bufferMemoryBarrierCount) {
+      args.BufferMemoryBarriers[i] = bufferMemoryBarriers[i]
+    }
+
+    handleImageMemoryBarriersPNext(pImageMemoryBarriers, imageMemoryBarrierCount)
+    imageMemoryBarriers := pImageMemoryBarriers[0:imageMemoryBarrierCount]
+    for i in (0 .. imageMemoryBarrierCount) {
+      args.ImageMemoryBarriers[i] = imageMemoryBarriers[i]
+      img := Images[args.ImageMemoryBarriers[i].image]
+      RecordLayoutTransition(cb,
+        img,
+        args.ImageMemoryBarriers[i].subresourceRange,
+        args.ImageMemoryBarriers[i].newLayout
+      )
+    }
+
+    mapPos := as!u32(len(cb.BufferCommands.vkCmdPipelineBarrier))
+    cb.BufferCommands.vkCmdPipelineBarrier[mapPos] = args
+
+    AddCommand(commandBuffer, cmd_vkCmdPipelineBarrier, mapPos)
+  }
+}
+
+extern void recordEventWait(VkEvent event)
+extern void recordEventSet(VkEvent event)
+extern void recordFenceSignal(VkFence fence)
+extern void recordFenceWait(VkFence fence)
+extern void recordFenceReset(VkFence fence)
+extern void recordWaitedFences(VkDevice device, u32 fenceCount, const VkFence* pFences)
+
+sub void processBarriers(VkPipelineStageFlags             srcStageMask,
+                         VkPipelineStageFlags             dstStageMask,
+                         map!(u32, VkMemoryBarrier)       memoryBarriers,
+                         map!(u32, VkBufferMemoryBarrier) bufferBarriers,
+                         map!(u32, VkImageMemoryBarrier)  imageBarriers) {
+  // Note: srcStageMask, dstStageMask, srcAccessMask, dstAccessMask
+  // These parameters do not currently seem to to affect any state change, but
+  // are included as arguments here as they may may be helpful for future
+  // validation or analysis.
+
+  processMemoryBarriers(srcStageMask, dstStageMask, memoryBarriers)
+  processBufferBarriers(srcStageMask, dstStageMask, bufferBarriers)
+
+  for _ , _ , v in imageBarriers {
+    if !(v.image in Images) { vkErrorInvalidImage(v.image) } else {
+      image := Images[v.image]
+      transitionImageLayout(image, v.subresourceRange, v.oldLayout, v.newLayout)
+
+      // TODO (#2395): `updateImageQueue` seems to assume that the current queue
+      // takes ownership of the image, but this is not necessarily the case for
+      // queue family ownership barriers.
+      updateImageQueue(image, v.subresourceRange)
+
+      processImageBarrier(v, image)
+    }
+  }
+}
+
+@spy_disabled
+sub void processMemoryBarriers(VkPipelineStageFlags       srcStageMask,
+                               VkPipelineStageFlags       dstStageMask,
+                               map!(u32, VkMemoryBarrier) memoryBarriers) {
+  if len(memoryBarriers) > 0 {
+    for _ , _ , img in Images {
+      for _ , _ , aspect in img.Aspects {
+        for _ , _ , layer in aspect.Layers {
+          for _ , _ , level in layer.Levels {
+            read(level.Data)
+            write(level.Data)
+          }
+        }
+      }
+    }
+    for _ , _ , mem in DeviceMemories {
+      read(mem.Data)
+      write(mem.Data)
+    }
+  }
+}
+
+@spy_disabled
+sub void processBufferBarriers(VkPipelineStageFlags             srcStageMask,
+                               VkPipelineStageFlags             dstStageMask,
+                               map!(u32, VkBufferMemoryBarrier) bufferBarriers) {
+  for _ , _ , v in bufferBarriers {
+    if !(v.buffer in Buffers) { vkErrorInvalidBuffer(v.buffer) } else {
+      buf := Buffers[v.buffer]
+      readMemoryInBuffer(buf, v.offset, v.size)
+      writeMemoryInBuffer(buf, v.offset, v.size)
+      // TODO (#2395): transition queue family ownership
+    }
+  }
+}
+
+@spy_disabled
+sub void processImageBarrier(VkImageMemoryBarrier v, ref!ImageObject image) {
+  if v.oldLayout != VK_IMAGE_LAYOUT_UNDEFINED {
+    readImageSubresource(image, v.subresourceRange)
+  }
+  writeImageSubresource(image, v.subresourceRange)
+  // TODO (#2395): transition queue family ownership
+}

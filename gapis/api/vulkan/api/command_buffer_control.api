@@ -1,0 +1,753 @@
+// Copyright (C) 2018 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Based off of the original vulkan.h header file which has the following
+// license.
+
+// Copyright (c) 2015 The Khronos Group Inc.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and/or associated documentation files (the
+// "Materials"), to deal in the Materials without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Materials, and to
+// permit persons to whom the Materials are furnished to do so, subject to
+// the following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Materials.
+//
+// THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+// MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+
+//////////////////
+// Command pool //
+//////////////////
+
+@internal class CommandPoolObject {
+  @unused VkDevice                                       Device
+  @unused VkCommandPool                                  VulkanHandle
+  @unused VkCommandPoolCreateFlags                       Flags
+  @unused u32                                            QueueFamilyIndex
+  @unused map!(VkCommandBuffer, ref!CommandBufferObject) CommandBuffers
+  @unused ref!VulkanDebugMarkerInfo                      DebugInfo
+}
+
+@indirect("VkDevice")
+cmd VkResult vkCreateCommandPool(
+    VkDevice                       device,
+    const VkCommandPoolCreateInfo* pCreateInfo,
+    AllocationCallbacks            pAllocator,
+    VkCommandPool*                 pCommandPool) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if pCreateInfo == null { vkErrorNullPointer("VkCommandPoolCreateInfo") }
+  create_info := pCreateInfo[0]
+  // handle pNext
+  if create_info.pNext != null {
+    numPNext := numberOfPNext(create_info.pNext)
+    next := MutableVoidPtr(as!void*(create_info.pNext))
+    for i in (0 .. numPNext) {
+      sType := as!const VkStructureType*(next.Ptr)[0]
+      switch (sType) {
+      }
+      next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+    }
+  }
+
+  handle := ?
+  if pCommandPool == null { vkErrorNullPointer("VkCommandPool") }
+  pCommandPool[0] = handle
+  commandPoolObject := new!CommandPoolObject(Device: device,
+    VulkanHandle:             handle,
+    Flags:                    create_info.flags,
+    QueueFamilyIndex:         create_info.queueFamilyIndex)
+  CommandPools[handle] = commandPoolObject
+
+  return ?
+}
+
+@indirect("VkDevice")
+cmd void vkDestroyCommandPool(
+    VkDevice                     device,
+    VkCommandPool                commandPool,
+    AllocationCallbacks          pAllocator) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if (commandPool != as!VkCommandPool(0)) {
+    if !(commandPool in CommandPools) { vkErrorInvalidCommandPool(commandPool) }
+    for _ , k , _ in CommandPools[commandPool].CommandBuffers {
+      delete(CommandBuffers, k)
+    }
+    delete(CommandPools, commandPool)
+  }
+}
+
+@indirect("VkDevice")
+cmd VkResult vkResetCommandPool(
+    VkDevice                device,
+    VkCommandPool           commandPool,
+    VkCommandPoolResetFlags flags) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if !(commandPool in CommandPools) { vkErrorInvalidCommandPool(commandPool) }
+  pool := CommandPools[commandPool]
+  for _ , _ , b in pool.CommandBuffers {
+    b.BeginInfo = null
+    b.Recording = NOT_STARTED
+    resetCommandBuffer(b)
+  }
+  return ?
+}
+
+////////////////////
+// Command buffer //
+////////////////////
+
+enum RecordingState {
+  NOT_STARTED  = 0,
+  RECORDING    = 1,
+  COMPLETED    = 2,
+  TO_BE_RESET  = 3
+}
+
+@internal class DeviceGroupBegin {
+  u32         DeviceMask
+}
+
+@internal class CommandBufferBegin {
+  VkCommandBufferUsageFlags     Flags
+  bool                          Inherited
+  VkRenderPass                  InheritedRenderPass
+  u32                           InheritedSubpass
+  VkFramebuffer                 InheritedFramebuffer
+  VkBool32                      InheritedOcclusionQuery
+  VkQueryControlFlags           InheritedQueryFlags
+  VkQueryPipelineStatisticFlags InheritedPipelineStatsFlags
+  ref!DeviceGroupBegin          DeviceGroupBegin
+}
+
+enum CommandType {
+  cmd_vkCmdBindPipeline                  = 0,
+  cmd_vkCmdSetViewport                   = 1,
+  cmd_vkCmdSetScissor                    = 2,
+  cmd_vkCmdSetLineWidth                  = 3,
+  cmd_vkCmdSetDepthBias                  = 4,
+  cmd_vkCmdSetBlendConstants             = 5,
+  cmd_vkCmdSetDepthBounds                = 6,
+  cmd_vkCmdSetStencilCompareMask         = 7,
+  cmd_vkCmdSetStencilWriteMask           = 8,
+  cmd_vkCmdSetStencilReference           = 9,
+  cmd_vkCmdBindDescriptorSets            = 10,
+  cmd_vkCmdBindIndexBuffer               = 11,
+  cmd_vkCmdBindVertexBuffers             = 12,
+  cmd_vkCmdDraw                          = 13,
+  cmd_vkCmdDrawIndexed                   = 14,
+  cmd_vkCmdDrawIndirect                  = 15,
+  cmd_vkCmdDrawIndexedIndirect           = 16,
+  cmd_vkCmdDispatch                      = 17,
+  cmd_vkCmdDispatchIndirect              = 18,
+  cmd_vkCmdCopyBuffer                    = 19,
+  cmd_vkCmdCopyImage                     = 20,
+  cmd_vkCmdBlitImage                     = 21,
+  cmd_vkCmdCopyBufferToImage             = 22,
+  cmd_vkCmdCopyImageToBuffer             = 23,
+  cmd_vkCmdUpdateBuffer                  = 24,
+  cmd_vkCmdFillBuffer                    = 25,
+  cmd_vkCmdClearColorImage               = 26,
+  cmd_vkCmdClearDepthStencilImage        = 27,
+  cmd_vkCmdClearAttachments              = 28,
+  cmd_vkCmdResolveImage                  = 29,
+  cmd_vkCmdSetEvent                      = 30,
+  cmd_vkCmdResetEvent                    = 31,
+  cmd_vkCmdWaitEvents                    = 32,
+  cmd_vkCmdPipelineBarrier               = 33,
+  cmd_vkCmdBeginQuery                    = 34,
+  cmd_vkCmdEndQuery                      = 35,
+  cmd_vkCmdResetQueryPool                = 36,
+  cmd_vkCmdWriteTimestamp                = 37,
+  cmd_vkCmdCopyQueryPoolResults          = 38,
+  cmd_vkCmdPushConstants                 = 39,
+  cmd_vkCmdBeginRenderPass               = 40,
+  cmd_vkCmdNextSubpass                   = 41,
+  cmd_vkCmdEndRenderPass                 = 42,
+  cmd_vkCmdExecuteCommands               = 43,
+  cmd_vkCmdDebugMarkerBeginEXT           = 44,
+  cmd_vkCmdDebugMarkerEndEXT             = 45,
+  cmd_vkCmdDebugMarkerInsertEXT          = 46,
+  cmd_vkCmdDrawIndirectCountKHR          = 47,
+  cmd_vkCmdDrawIndexedIndirectCountKHR   = 48,
+  cmd_vkCmdDrawIndirectCountAMD          = 49,
+  cmd_vkCmdDrawIndexedIndirectCountAMD   = 50,
+  cmd_vkCmdBeginDebugUtilsLabelEXT       = 51,
+  cmd_vkCmdEndDebugUtilsLabelEXT         = 52,
+  cmd_vkCmdInsertDebugUtilsLabelEXT      = 53,
+  cmd_vkCmdSetDeviceMaskKHR              = 54,
+  cmd_vkCmdSetDeviceMask                 = 55,
+  cmd_vkCmdDispatchBaseKHR               = 56,
+  cmd_vkCmdDispatchBase                  = 57,
+  cmd_vkCmdSetLineStippleEXT             = 58,
+
+  // @extension("VK_EXT_transform_feedback")
+  cmd_vkCmdBindTransformFeedbackBuffersEXT  = 59,
+  cmd_vkCmdBeginTransformFeedbackEXT        = 60,
+  cmd_vkCmdEndTransformFeedbackEXT          = 61,
+  cmd_vkCmdBeginQueryIndexedEXT             = 62,
+  cmd_vkCmdEndQueryIndexedEXT               = 63,
+  cmd_vkCmdDrawIndirectByteCountEXT         = 64,
+
+  // @extension("VK_KHR_create_renderpass2")
+  cmd_vkCmdBeginRenderPass2 = 65,
+  cmd_vkCmdBeginRenderPass2KHR = 66,
+  cmd_vkCmdEndRenderPass2 = 67,
+  cmd_vkCmdEndRenderPass2KHR = 68,
+  cmd_vkCmdNextSubpass2 = 69,
+  cmd_vkCmdNextSubpass2KHR = 70,
+
+  cmd_vkNoCommand = 0xFFFFFFFF
+}
+
+enum SemaphoreUpdate {
+  None     = 0,
+  Unsignal = 1,
+  Signal   = 2
+}
+
+@internal class QueuedSparseBinds {
+  @unused map!(VkBuffer, ref!SparseMemoryBinds)     BufferBinds
+  @unused map!(VkImage, ref!SparseMemoryBinds)      OpaqueImageBinds
+  @unused map!(VkImage, ref!SparseImageMemoryBinds) ImageBinds
+}
+
+@internal class CommandReference {
+  @unused VkCommandBuffer       Buffer
+  @unused u32                   CommandIndex
+  @unused CommandType           Type
+  @unused u32                   MapIndex
+}
+
+@internal class BufferCommands {
+  @untrackedMap dense_map!(u32, ref!vkCmdBindPipelineArgs)           vkCmdBindPipeline
+  @untrackedMap dense_map!(u32, ref!vkCmdSetViewportArgs)            vkCmdSetViewport
+  @untrackedMap dense_map!(u32, ref!vkCmdSetScissorArgs)             vkCmdSetScissor
+  @untrackedMap dense_map!(u32, ref!vkCmdSetLineWidthArgs)           vkCmdSetLineWidth
+  @untrackedMap dense_map!(u32, ref!vkCmdSetDepthBiasArgs)           vkCmdSetDepthBias
+  @untrackedMap dense_map!(u32, ref!vkCmdSetBlendConstantsArgs)      vkCmdSetBlendConstants
+  @untrackedMap dense_map!(u32, ref!vkCmdSetDepthBoundsArgs)         vkCmdSetDepthBounds
+  @untrackedMap dense_map!(u32, ref!vkCmdSetStencilCompareMaskArgs)  vkCmdSetStencilCompareMask
+  @untrackedMap dense_map!(u32, ref!vkCmdSetStencilWriteMaskArgs)    vkCmdSetStencilWriteMask
+  @untrackedMap dense_map!(u32, ref!vkCmdSetStencilReferenceArgs)    vkCmdSetStencilReference
+  @untrackedMap dense_map!(u32, ref!vkCmdBindDescriptorSetsArgs)     vkCmdBindDescriptorSets
+  @untrackedMap dense_map!(u32, ref!vkCmdBindIndexBufferArgs)        vkCmdBindIndexBuffer
+  @untrackedMap dense_map!(u32, ref!vkCmdBindVertexBuffersArgs)      vkCmdBindVertexBuffers
+  @untrackedMap dense_map!(u32, ref!vkCmdDrawArgs)                   vkCmdDraw
+  @untrackedMap dense_map!(u32, ref!vkCmdDrawIndexedArgs)            vkCmdDrawIndexed
+  @untrackedMap dense_map!(u32, ref!vkCmdDrawIndirectArgs)           vkCmdDrawIndirect
+  @untrackedMap dense_map!(u32, ref!vkCmdDrawIndexedIndirectArgs)    vkCmdDrawIndexedIndirect
+  @untrackedMap dense_map!(u32, ref!vkCmdDispatchArgs)               vkCmdDispatch
+  @untrackedMap dense_map!(u32, ref!vkCmdDispatchIndirectArgs)       vkCmdDispatchIndirect
+  @untrackedMap dense_map!(u32, ref!vkCmdCopyBufferArgs)             vkCmdCopyBuffer
+  @untrackedMap dense_map!(u32, ref!vkCmdCopyImageArgs)              vkCmdCopyImage
+  @untrackedMap dense_map!(u32, ref!vkCmdBlitImageArgs)              vkCmdBlitImage
+  @untrackedMap dense_map!(u32, ref!vkCmdCopyBufferToImageArgs)      vkCmdCopyBufferToImage
+  @untrackedMap dense_map!(u32, ref!vkCmdCopyImageToBufferArgs)      vkCmdCopyImageToBuffer
+  @untrackedMap dense_map!(u32, ref!vkCmdUpdateBufferArgs)           vkCmdUpdateBuffer
+  @untrackedMap dense_map!(u32, ref!vkCmdFillBufferArgs)             vkCmdFillBuffer
+  @untrackedMap dense_map!(u32, ref!vkCmdClearColorImageArgs)        vkCmdClearColorImage
+  @untrackedMap dense_map!(u32, ref!vkCmdClearDepthStencilImageArgs) vkCmdClearDepthStencilImage
+  @untrackedMap dense_map!(u32, ref!vkCmdClearAttachmentsArgs)       vkCmdClearAttachments
+  @untrackedMap dense_map!(u32, ref!vkCmdResolveImageArgs)           vkCmdResolveImage
+  @untrackedMap dense_map!(u32, ref!vkCmdSetEventArgs)               vkCmdSetEvent
+  @untrackedMap dense_map!(u32, ref!vkCmdResetEventArgs)             vkCmdResetEvent
+  @untrackedMap dense_map!(u32, ref!vkCmdWaitEventsArgs)             vkCmdWaitEvents
+  @untrackedMap dense_map!(u32, ref!vkCmdPipelineBarrierArgs)        vkCmdPipelineBarrier
+  @untrackedMap dense_map!(u32, ref!vkCmdBeginQueryArgs)             vkCmdBeginQuery
+  @untrackedMap dense_map!(u32, ref!vkCmdEndQueryArgs)               vkCmdEndQuery
+  @untrackedMap dense_map!(u32, ref!vkCmdResetQueryPoolArgs)         vkCmdResetQueryPool
+  @untrackedMap dense_map!(u32, ref!vkCmdWriteTimestampArgs)         vkCmdWriteTimestamp
+  @untrackedMap dense_map!(u32, ref!vkCmdCopyQueryPoolResultsArgs)   vkCmdCopyQueryPoolResults
+  @untrackedMap dense_map!(u32, ref!vkCmdPushConstantsArgs)          vkCmdPushConstants
+  @untrackedMap dense_map!(u32, ref!vkCmdBeginRenderPassXArgs)  vkCmdBeginRenderPass
+  @untrackedMap dense_map!(u32, ref!vkCmdNextSubpassXArgs)      vkCmdNextSubpass
+  @untrackedMap dense_map!(u32, ref!vkCmdEndRenderPassXArgs)    vkCmdEndRenderPass
+  @untrackedMap dense_map!(u32, ref!vkCmdExecuteCommandsArgs)        vkCmdExecuteCommands
+  @untrackedMap dense_map!(u32, ref!vkCmdDebugMarkerBeginEXTArgs)    vkCmdDebugMarkerBeginEXT
+  @untrackedMap dense_map!(u32, ref!vkCmdDebugMarkerEndEXTArgs)      vkCmdDebugMarkerEndEXT
+  @untrackedMap dense_map!(u32, ref!vkCmdDebugMarkerInsertEXTArgs)   vkCmdDebugMarkerInsertEXT
+  @untrackedMap dense_map!(u32, ref!vkCmdDrawIndirectCountKHRArgs)   vkCmdDrawIndirectCountKHR
+  @untrackedMap dense_map!(u32, ref!vkCmdDrawIndexedIndirectCountKHRArgs)   vkCmdDrawIndexedIndirectCountKHR
+  @untrackedMap dense_map!(u32, ref!vkCmdDrawIndirectCountAMDArgs)   vkCmdDrawIndirectCountAMD
+  @untrackedMap dense_map!(u32, ref!vkCmdDrawIndexedIndirectCountAMDArgs)   vkCmdDrawIndexedIndirectCountAMD
+  @untrackedMap dense_map!(u32, ref!vkCmdBeginDebugUtilsLabelEXTArgs)  vkCmdBeginDebugUtilsLabelEXT
+  @untrackedMap dense_map!(u32, ref!vkCmdEndDebugUtilsLabelEXTArgs)    vkCmdEndDebugUtilsLabelEXT
+  @untrackedMap dense_map!(u32, ref!vkCmdInsertDebugUtilsLabelEXTArgs) vkCmdInsertDebugUtilsLabelEXT
+  @untrackedMap dense_map!(u32, ref!vkCmdSetDeviceMaskKHRArgs)         vkCmdSetDeviceMaskKHR
+  @untrackedMap dense_map!(u32, ref!vkCmdSetDeviceMaskArgs)            vkCmdSetDeviceMask
+  @untrackedMap dense_map!(u32, ref!vkCmdDispatchBaseKHRArgs)          vkCmdDispatchBaseKHR
+  @untrackedMap dense_map!(u32, ref!vkCmdDispatchBaseArgs)             vkCmdDispatchBase
+  @untrackedMap dense_map!(u32, ref!vkCmdSetLineStippleEXTArgs)        vkCmdSetLineStippleEXT
+
+  // Vulkan 1.2
+  @untrackedMap dense_map!(u32, ref!vkCmdBeginRenderPassXArgs)  vkCmdBeginRenderPass2
+  @untrackedMap dense_map!(u32, ref!vkCmdEndRenderPassXArgs)    vkCmdEndRenderPass2
+  @untrackedMap dense_map!(u32, ref!vkCmdNextSubpassXArgs)      vkCmdNextSubpass2
+
+  // @extension("VK_EXT_transform_feedback")
+  @untrackedMap dense_map!(u32, ref!vkCmdBindTransformFeedbackBuffersEXTArgs) vkCmdBindTransformFeedbackBuffersEXT
+  @untrackedMap dense_map!(u32, ref!vkCmdBeginTransformFeedbackEXTArgs) vkCmdBeginTransformFeedbackEXT
+  @untrackedMap dense_map!(u32, ref!vkCmdEndTransformFeedbackEXTArgs) vkCmdEndTransformFeedbackEXT
+  @untrackedMap dense_map!(u32, ref!vkCmdBeginQueryIndexedEXTArgs) vkCmdBeginQueryIndexedEXT
+  @untrackedMap dense_map!(u32, ref!vkCmdEndQueryIndexedEXTArgs) vkCmdEndQueryIndexedEXT
+  @untrackedMap dense_map!(u32, ref!vkCmdDrawIndirectByteCountEXTArgs) vkCmdDrawIndirectByteCountEXT
+
+  // @extension("VK_KHR_create_renderpass2")
+  @untrackedMap dense_map!(u32, ref!vkCmdBeginRenderPassXArgs)  vkCmdBeginRenderPass2KHR
+  @untrackedMap dense_map!(u32, ref!vkCmdEndRenderPassXArgs)    vkCmdEndRenderPass2KHR
+  @untrackedMap dense_map!(u32, ref!vkCmdNextSubpassXArgs)      vkCmdNextSubpass2KHR
+}
+
+@internal class AspectImageTransition {
+  // This u64 is a combination of 2 u32s, (layer << 8 | level)
+  map!(u64, VkImageLayout)                Layouts
+}
+
+@internal class  ImageTransitions {
+  map!(VkImageAspectFlagBits, ref!AspectImageTransition) AspectTransitions
+}
+
+@internal class CommandBufferObject {
+  @unused VkDevice                        Device
+  @unused RecordingState                  Recording
+  @unused VkCommandBuffer                 VulkanHandle
+  @unused VkCommandPool                   Pool
+  @unused VkCommandBufferLevel            Level
+  @untrackedMap @unused
+  dense_map!(u32, ref!CommandReference)   CommandReferences
+  @untracked @unused BufferCommands       BufferCommands
+  @unused ref!CommandBufferBegin          BeginInfo
+  @unused ref!VulkanDebugMarkerInfo       DebugInfo
+
+  @unused
+  map!(VkImage, ref!ImageTransitions)         ImageTransitions
+  @unused
+  ref!RenderPassObject                        CurrentRecordingRenderpass
+  ref!FramebufferObject                       CurrentRecordingFramebuffer
+  u32                                         CurrentRecordingSubpass
+  ref!RenderPassObject                        PreviouslyStartedRenderpass
+  ref!FramebufferObject                       PreviousFramebuffer
+  map!(u32, ref!ImageViewObject)              CurrentRecordingFramebufferAttachments
+  map!(u32, ref!ImageViewObject)              PreviousFramebufferAttachments
+}
+
+sub void RecordLayoutTransition(ref!CommandBufferObject obj, ref!ImageObject img, VkImageSubresourceRange rng, VkImageLayout new_layout) {
+  if img != null {
+    if !(img.VulkanHandle in obj.ImageTransitions) {
+      obj.ImageTransitions[img.VulkanHandle] = new!ImageTransitions()
+    }
+    layerCount := imageSubresourceLayerCount(img, rng)
+    levelCount := imageSubresourceLevelCount(img, rng)
+    transitions := obj.ImageTransitions[img.VulkanHandle]
+
+    for _ , _ , aspectBit in unpackImageAspectFlags(img, rng.aspectMask) {
+      if !aspectBit in transitions.AspectTransitions {
+          transitions.AspectTransitions[aspectBit] = new!AspectImageTransition()
+      }
+      aspectTransitions := transitions.AspectTransitions[aspectBit]
+      for i in 0 .. levelCount {
+        for j in 0 .. layerCount {
+          level := rng.baseMipLevel + i
+          layer := rng.baseArrayLayer + j
+          aspectTransitions.Layouts[(as!u64(layer) << 8) | as!u64(level & 0xFF)] = new_layout
+        }
+      }
+    }
+  }
+}
+
+sub void MergeLayoutTransitions(ref!CommandBufferObject dst, ref!CommandBufferObject src) {
+  for _, img, aspect_transitions in src.ImageTransitions {
+    if !(img in dst.ImageTransitions) {
+      dst.ImageTransitions[img] = new!ImageTransitions()
+    }
+    dst_transitions := dst.ImageTransitions[img]
+    for _, aspect, transitions in aspect_transitions.AspectTransitions {
+      if !aspect in dst_transitions.AspectTransitions {
+        dst_transitions.AspectTransitions[aspect] = new!AspectImageTransition()
+      }
+      dstLayouts := dst_transitions.AspectTransitions[aspect]
+      for _, k, v in transitions.Layouts {
+        dstLayouts.Layouts[k] = v
+      }
+    }
+  }
+}
+
+sub void AddCommand(
+    VkCommandBuffer commandBuffer,
+    CommandType     type,
+    u32             mapPos) {
+  commandIndex := as!u32(len(CommandBuffers[commandBuffer].CommandReferences))
+  cmd := new!CommandReference(
+    Buffer: commandBuffer,
+    CommandIndex: commandIndex,
+    Type: type,
+    MapIndex: mapPos,
+  )
+  cb := CommandBuffers[commandBuffer]
+  if cb.Recording != RECORDING {
+    vkErrorCommandBufferNotRecording(commandBuffer)
+  }
+  cb.CommandReferences[commandIndex] = cmd
+  onCommandAdded(commandBuffer)
+}
+
+@indirect("VkDevice")
+@custom
+cmd VkResult vkAllocateCommandBuffers(
+    VkDevice                           device,
+    const VkCommandBufferAllocateInfo* pAllocateInfo,
+    VkCommandBuffer*                   pCommandBuffers) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if pAllocateInfo == null { vkErrorNullPointer("VkCommandBufferAllocateInfo") }
+  allocateInfo := pAllocateInfo[0]
+  // handle pNext
+  if allocateInfo.pNext != null {
+    numPNext := numberOfPNext(allocateInfo.pNext)
+    next := MutableVoidPtr(as!void*(allocateInfo.pNext))
+    for i in (0 .. numPNext) {
+      sType := as!const VkStructureType*(next.Ptr)[0]
+      switch (sType) {
+      }
+      next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+    }
+  }
+  count := allocateInfo.commandBufferCount
+
+  fence
+  if pCommandBuffers == null { vkErrorNullPointer("VkCommandBuffer") }
+  cb := pCommandBuffers[0:count]
+
+  for i in (0 .. count) {
+    command_buffer := ?
+    cb[i] = command_buffer
+    CommandBuffers[command_buffer] = new!CommandBufferObject(
+      Device:        device,
+      VulkanHandle:  command_buffer,
+      Recording:     NOT_STARTED,
+      Pool:          allocateInfo.commandPool,
+      Level:         allocateInfo.level)
+    command_pool := CommandPools[allocateInfo.commandPool]
+    command_pool.CommandBuffers[command_buffer] = CommandBuffers[command_buffer]
+  }
+  return ?
+}
+
+@indirect("VkDevice")
+@custom
+cmd void vkFreeCommandBuffers(
+    VkDevice               device,
+    VkCommandPool          commandPool,
+    u32                    commandBufferCount,
+    const VkCommandBuffer* pCommandBuffers) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if !(commandPool in CommandPools) { vkErrorInvalidCommandPool(commandPool) }
+  cb := pCommandBuffers[0:commandBufferCount]
+  for i in (0 .. commandBufferCount) {
+    buffer := cb[i]
+    if buffer != as!VkCommandBuffer(0) {
+      if !(buffer in CommandBuffers) {
+        vkErrorInvalidCommandBuffer(buffer)
+      } else {
+        buffer_object := CommandBuffers[buffer]
+        pool := buffer_object.Pool
+        pool_object := CommandPools[pool]
+        delete(pool_object.CommandBuffers, buffer)
+        resetCmd(buffer)
+        delete(CommandBuffers, buffer)
+      }
+    }
+  }
+}
+
+extern void recordBeginCommandBuffer(VkCommandBuffer commandBuffer)
+extern void recordEndCommandBuffer(VkCommandBuffer commandBuffer)
+
+@indirect("VkCommandBuffer", "VkDevice")
+cmd VkResult vkBeginCommandBuffer(
+    VkCommandBuffer                 commandBuffer,
+    const VkCommandBufferBeginInfo* pBeginInfo) {
+  if pBeginInfo == null { vkErrorNullPointer("VkCommandBufferBeginInfo") }
+  info := pBeginInfo[0]
+  begin := new!CommandBufferBegin(Flags: info.flags,Inherited:  false)
+
+  // handle pNext
+  if info.pNext != null {
+    numPNext := numberOfPNext(info.pNext)
+    next := MutableVoidPtr(as!void*(info.pNext))
+    for i in (0 .. numPNext) {
+      sType := as!const VkStructureType*(next.Ptr)[0]
+      switch sType {
+        case VK_STRUCTURE_TYPE_DEVICE_GROUP_COMMAND_BUFFER_BEGIN_INFO: {
+          ext := as!VkDeviceGroupCommandBufferBeginInfo*(next.Ptr)[0]
+          begin.DeviceGroupBegin = new!DeviceGroupBegin(
+            DeviceMask: ext.deviceMask,
+          )
+        }
+      }
+      next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+    }
+  }
+
+  if !(commandBuffer in CommandBuffers) {
+    vkErrorInvalidCommandBuffer(commandBuffer)
+  } else {
+    buff := CommandBuffers[commandBuffer]
+    clear(buff.ImageTransitions)
+    if (buff.Level == VK_COMMAND_BUFFER_LEVEL_SECONDARY) && (info.pInheritanceInfo != null) {
+      inheritanceInfo := info.pInheritanceInfo[0]
+      begin.Inherited = true
+      begin.InheritedRenderPass = inheritanceInfo.renderPass
+      begin.InheritedSubpass = inheritanceInfo.subpass
+      begin.InheritedFramebuffer = inheritanceInfo.framebuffer
+      begin.InheritedOcclusionQuery = inheritanceInfo.occlusionQueryEnable
+      begin.InheritedQueryFlags = inheritanceInfo.queryFlags
+      begin.InheritedPipelineStatsFlags = inheritanceInfo.pipelineStatistics
+      // handle pBeginInfo->pInheritanceInfo->pNext
+      if inheritanceInfo.pNext != null {
+        numPNext := numberOfPNext(inheritanceInfo.pNext)
+        next := MutableVoidPtr(as!void*(inheritanceInfo.pNext))
+        for i in (0 .. numPNext) {
+          sType := as!const VkStructureType*(next.Ptr)[0]
+          switch (sType) {
+          }
+          next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+        }
+      }
+    }
+
+    buff.BeginInfo = begin
+    buff.Recording = RECORDING
+    resetCommandBuffer(buff)
+  }
+
+  recordBeginCommandBuffer(commandBuffer)
+  return ?
+}
+
+@indirect("VkCommandBuffer", "VkDevice")
+cmd VkResult vkEndCommandBuffer(
+    VkCommandBuffer commandBuffer) {
+  if !(commandBuffer in CommandBuffers) {
+    vkErrorInvalidCommandBuffer(commandBuffer)
+  } else {
+    buff := CommandBuffers[commandBuffer]
+    if (buff.Recording != RECORDING) {
+      vkErrorCommandBufferNotRecording(commandBuffer)
+    }
+    buff.Recording = COMPLETED
+  }
+  recordEndCommandBuffer(commandBuffer)
+  return ?
+}
+
+@indirect("VkCommandBuffer", "VkDevice")
+cmd VkResult vkResetCommandBuffer(
+    VkCommandBuffer           commandBuffer,
+    VkCommandBufferResetFlags flags) {
+  if !(commandBuffer in CommandBuffers) {
+    vkErrorInvalidCommandBuffer(commandBuffer)
+  } else {
+    buff := CommandBuffers[commandBuffer]
+    buff.Recording = NOT_STARTED
+    buff.BeginInfo = null
+    resetCommandBuffer(buff)
+  }
+  return ?
+}
+
+sub void resetBufferCommands(ref!CommandBufferObject obj) {
+  clear(obj.BufferCommands.vkCmdBindPipeline)
+  clear(obj.BufferCommands.vkCmdSetViewport)
+  clear(obj.BufferCommands.vkCmdSetScissor)
+  clear(obj.BufferCommands.vkCmdSetLineWidth)
+  clear(obj.BufferCommands.vkCmdSetDepthBias)
+  clear(obj.BufferCommands.vkCmdSetBlendConstants)
+  clear(obj.BufferCommands.vkCmdSetDepthBounds)
+  clear(obj.BufferCommands.vkCmdSetStencilCompareMask)
+  clear(obj.BufferCommands.vkCmdSetStencilWriteMask)
+  clear(obj.BufferCommands.vkCmdSetStencilReference)
+  clear(obj.BufferCommands.vkCmdBindDescriptorSets)
+  clear(obj.BufferCommands.vkCmdBindIndexBuffer)
+  clear(obj.BufferCommands.vkCmdBindVertexBuffers)
+  clear(obj.BufferCommands.vkCmdDraw)
+  clear(obj.BufferCommands.vkCmdDrawIndexed)
+  clear(obj.BufferCommands.vkCmdDrawIndirect)
+  clear(obj.BufferCommands.vkCmdDrawIndexedIndirect)
+  clear(obj.BufferCommands.vkCmdDispatch)
+  clear(obj.BufferCommands.vkCmdDispatchIndirect)
+  clear(obj.BufferCommands.vkCmdCopyBuffer)
+  clear(obj.BufferCommands.vkCmdCopyImage)
+  clear(obj.BufferCommands.vkCmdBlitImage)
+  clear(obj.BufferCommands.vkCmdCopyBufferToImage)
+  clear(obj.BufferCommands.vkCmdCopyImageToBuffer)
+  clear(obj.BufferCommands.vkCmdUpdateBuffer)
+  clear(obj.BufferCommands.vkCmdFillBuffer)
+  clear(obj.BufferCommands.vkCmdClearColorImage)
+  clear(obj.BufferCommands.vkCmdClearDepthStencilImage)
+  clear(obj.BufferCommands.vkCmdClearAttachments)
+  clear(obj.BufferCommands.vkCmdResolveImage)
+  clear(obj.BufferCommands.vkCmdSetEvent)
+  clear(obj.BufferCommands.vkCmdResetEvent)
+  clear(obj.BufferCommands.vkCmdWaitEvents)
+  clear(obj.BufferCommands.vkCmdPipelineBarrier)
+  clear(obj.BufferCommands.vkCmdBeginQuery)
+  clear(obj.BufferCommands.vkCmdEndQuery)
+  clear(obj.BufferCommands.vkCmdResetQueryPool)
+  clear(obj.BufferCommands.vkCmdWriteTimestamp)
+  clear(obj.BufferCommands.vkCmdCopyQueryPoolResults)
+  clear(obj.BufferCommands.vkCmdPushConstants)
+  clear(obj.BufferCommands.vkCmdBeginRenderPass)
+  clear(obj.BufferCommands.vkCmdNextSubpass)
+  clear(obj.BufferCommands.vkCmdEndRenderPass)
+  clear(obj.BufferCommands.vkCmdExecuteCommands)
+  clear(obj.BufferCommands.vkCmdDebugMarkerBeginEXT)
+  clear(obj.BufferCommands.vkCmdDebugMarkerEndEXT)
+  clear(obj.BufferCommands.vkCmdDebugMarkerInsertEXT)
+  clear(obj.BufferCommands.vkCmdDrawIndirectCountKHR)
+  clear(obj.BufferCommands.vkCmdDrawIndexedIndirectCountKHR)
+  clear(obj.BufferCommands.vkCmdDrawIndirectCountAMD)
+  clear(obj.BufferCommands.vkCmdDrawIndexedIndirectCountAMD)
+  clear(obj.BufferCommands.vkCmdBeginDebugUtilsLabelEXT)
+  clear(obj.BufferCommands.vkCmdEndDebugUtilsLabelEXT)
+  clear(obj.BufferCommands.vkCmdInsertDebugUtilsLabelEXT)
+  clear(obj.BufferCommands.vkCmdSetDeviceMaskKHR)
+  clear(obj.BufferCommands.vkCmdSetDeviceMask)
+  clear(obj.BufferCommands.vkCmdDispatchBaseKHR)
+  clear(obj.BufferCommands.vkCmdDispatchBase)
+  clear(obj.BufferCommands.vkCmdSetLineStippleEXT)
+
+  // Vulkan 1.2
+  clear(obj.BufferCommands.vkCmdBeginRenderPass2)
+  clear(obj.BufferCommands.vkCmdEndRenderPass2)
+  clear(obj.BufferCommands.vkCmdNextSubpass2)
+
+  // @extension("VK_EXT_transform_feedback")
+  clear(obj.BufferCommands.vkCmdBindTransformFeedbackBuffersEXT)
+  clear(obj.BufferCommands.vkCmdBeginTransformFeedbackEXT)
+  clear(obj.BufferCommands.vkCmdEndTransformFeedbackEXT)
+  clear(obj.BufferCommands.vkCmdBeginQueryIndexedEXT)
+  clear(obj.BufferCommands.vkCmdEndQueryIndexedEXT)
+  clear(obj.BufferCommands.vkCmdDrawIndirectByteCountEXT)
+
+  // @extension("VK_KHR_create_renderpass2")
+  clear(obj.BufferCommands.vkCmdBeginRenderPass2KHR)
+  clear(obj.BufferCommands.vkCmdEndRenderPass2KHR)
+  clear(obj.BufferCommands.vkCmdNextSubpass2KHR)
+}
+
+sub void resetCommandBuffer(ref!CommandBufferObject obj) {
+  // Reset the commands instead of clearing them.
+  // We have to iterate over them either way, but this way
+  // we don't have to free/allocate new memory for the maps
+  resetBufferCommands(obj)
+  clear(obj.CommandReferences)
+  resetCmd(obj.VulkanHandle)
+}
+
+//////////////////////////////
+// Secondary command buffer //
+//////////////////////////////
+
+@internal
+class vkCmdExecuteCommandsArgs {
+  dense_map!(u32, VkCommandBuffer) CommandBuffers
+}
+
+sub void dovkCmdExecuteCommands(ref!vkCmdExecuteCommandsArgs cmds) {
+  enterSubcontext()
+  for i in (0 .. len(cmds.CommandBuffers)) {
+    cb := CommandBuffers[cmds.CommandBuffers[as!u32(i)]]
+    enterSubcontext()
+    for j in (0 .. len(cb.CommandReferences)) {
+      cmd := cb.CommandReferences[as!u32(j)]
+      onPreSubcommand(cmd)
+      callCommand(cmd)
+      onPostSubcommand(cmd)
+      nextSubcontext()
+    }
+    leaveSubcontext()
+    nextSubcontext()
+  }
+  leaveSubcontext()
+}
+
+@indirect("VkCommandBuffer", "VkDevice")
+@executed_command_buffer
+cmd void vkCmdExecuteCommands(
+    VkCommandBuffer        commandBuffer,
+    u32                    commandBufferCount,
+    const VkCommandBuffer* pCommandBuffers) {
+  if !(commandBuffer in CommandBuffers) {
+    vkErrorInvalidCommandBuffer(commandBuffer)
+  } else {
+    primary_buff := CommandBuffers[commandBuffer]
+    cmd_buffers := pCommandBuffers[0:commandBufferCount]
+    args := new!vkCmdExecuteCommandsArgs()
+    for i in (0 .. commandBufferCount) {
+      if !(cmd_buffers[i] in CommandBuffers) {
+        vkErrorInvalidCommandBuffer(cmd_buffers[i])
+      } else {
+        args.CommandBuffers[as!u32(i)] = cmd_buffers[i]
+      }
+      if !(cmd_buffers[i] in CommandBuffers) {
+        vkErrorInvalidCommandBuffer(cmd_buffers[i])
+      } else {
+        child_buf := CommandBuffers[cmd_buffers[i]]
+        MergeLayoutTransitions(primary_buff, child_buf)
+      }
+    }
+
+    mapPos := as!u32(len(primary_buff.BufferCommands.vkCmdExecuteCommands))
+    primary_buff.BufferCommands.vkCmdExecuteCommands[mapPos] = args
+
+    AddCommand(commandBuffer, cmd_vkCmdExecuteCommands, mapPos)
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Vulkan 1.1 Commands
+// ----------------------------------------------------------------------------
+
+//////////////////
+// Command pool //
+//////////////////
+
+sub void TrimCommandPool(
+    VkDevice                device,
+    VkCommandPool           commandPool,
+    VkCommandPoolTrimFlags  flags) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if !(commandPool in CommandPools) { vkErrorInvalidCommandPool(commandPool) }
+}
+
+@since("1.1")
+@indirect("VkDevice")
+cmd void vkTrimCommandPool(
+    VkDevice                device,
+    VkCommandPool           commandPool,
+    VkCommandPoolTrimFlags  flags) {
+  TrimCommandPool(device, commandPool, flags)
+}

@@ -1,0 +1,240 @@
+// Copyright (C) 2019 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+import "protos/perfetto/config/trace_config.proto";
+
+option java_package = "com.google.gapid.proto";
+option java_outer_classname = "SettingsProto";
+
+import "core/os/device/device.proto";
+import "gapis/service/service.proto";
+
+message Point {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+message Window {
+  Point location = 1;
+  Point size = 2;
+}
+
+message Tabs {
+  string structure = 1;
+  repeated int32 weights = 2;
+  repeated string tabs = 3;
+  repeated string hidden = 4;
+}
+
+message Files {
+  string last_open_dir = 1;
+  repeated string recent = 30;
+}
+
+message Preferences {
+  bool skip_first_run_dialog = 1;
+  string adb = 2;
+  bool check_for_updates = 3;
+  bool include_dev_releases = 4;
+  bool update_available = 5;
+  // milliseconds since midnight, January 1, 1970 UTC.
+  int64 last_check_for_updates = 6;
+  service.Releases.ANGLERelease latest_angle_release = 11;
+  string analytics_client_id = 7;  // Empty (default) means do not track.
+  bool disable_replay_optimization = 8;
+  bool report_crashes = 9;
+  bool enable_all_experimental_features = 10;
+  bool use_frame_looping = 12;
+  bool disable_command_thumbnails = 13;
+}
+
+message UI {
+  message SplitterWeights {
+    repeated int32 weight = 1;
+  }
+  map<string, SplitterWeights> splitter_weights = 1;
+
+  message Perfetto {
+    bool dark_mode = 1;
+    int32 drawer_height = 2;
+    bool show_vsync = 3;
+  }
+  Perfetto perfetto = 2;
+
+  message FramebufferPicker {
+    bool enabled = 1;
+  }
+  FramebufferPicker framebuffer_picker = 3;
+
+  message PerformancePreset {
+    string preset_name = 1;
+    string device_name = 2;
+    repeated int32 counter_ids = 3;
+  }
+  repeated PerformancePreset performance_presets = 4;
+
+  message CommandFilter {
+    bool show_host_commands = 1;
+    bool show_submit_info_nodes = 2;
+    bool show_sync_commands = 3;
+    bool show_begin_end_commands = 4;
+  }
+  CommandFilter command_filter = 5;
+
+  double command_splitter_ratio = 6;
+}
+
+message Trace {
+  message Duration {
+    enum Type {
+      MANUAL = 0;
+      BEGINNING = 1;
+      FRAME = 2;
+      TIME = 3;
+    }
+
+    Type type = 1;
+    int32 start_frame = 2;
+    int32 start_time = 3;
+    int32 duration = 4;
+  }
+
+  string device_serial = 1;
+  string device_name = 2;
+  string type = 3;
+  bool last_frame_trace_was_vulkan = 21;
+  string api = 4 [deprecated = true];  // Kept for de-serialization.
+  string uri = 5;
+  string arguments = 6;
+  string cwd = 7;
+  string env = 8;
+  reserved 9;
+  reserved 10;
+  bool without_buffering = 11;
+  reserved 12;
+  bool clear_cache = 13;
+  reserved 14;
+  string out_dir = 15;
+  string friendly_name = 16;
+  Duration gfx_duration = 17;
+  Duration profile_duration = 18;
+  string process_name = 19;
+  bool load_validation_layer = 20;
+}
+
+message Perfetto {
+  message CPU {
+    bool enabled = 1;
+    bool frequency = 2;
+    bool chain = 3;
+    bool slices = 4;
+  }
+  CPU cpu = 1;
+
+  message GPUCounters {
+    repeated int32 counter_ids = 1;
+  }
+
+  message GPU {
+    bool enabled = 1;
+    bool slices = 2;
+    bool counters = 3;
+    int32 counter_rate = 4;
+    reserved 5;
+    bool surface_flinger = 6;
+    map<string, GPUCounters> counters_by_gpu = 7;
+  }
+  GPU gpu = 2;
+
+  message Memory {
+    bool enabled = 1;
+    int32 rate = 2;
+  }
+  Memory memory = 3;
+
+  message Battery {
+    bool enabled = 1;
+    int32 rate = 2;
+    bool collectPowerRail = 3;
+    bool collectEnergyBreakdown = 4;
+  }
+  Battery battery = 4;
+
+  message Vulkan {
+    enum CpuTiming {
+      CPU_TIMING_COMMAND_BUFFER = 0;
+      CPU_TIMING_DEVICE = 1;
+      CPU_TIMING_INSTANCE = 2;
+      CPU_TIMING_PHYSICAL_DEVICE = 3;
+      CPU_TIMING_QUEUE = 4;
+    }
+
+    enum MemoryTracking {
+      MEMORY_TRACKING_DEVICE = 0;
+      MEMORY_TRACKING_DRIVER = 1;
+    }
+
+    bool enabled = 1;
+    bool cpu_timing = 2;
+    repeated CpuTiming cpu_timing_categories = 3;
+    bool memory_tracking = 4;
+    repeated MemoryTracking memory_tracking_categories = 5;
+  }
+  Vulkan vulkan = 5;
+
+  bool force_tracing_to_file = 8;
+
+  perfetto.protos.TraceConfig custom_config = 6;
+  bool use_custom = 7;
+}
+
+message FuchsiaTracing {
+  repeated string categories = 1;
+}
+
+message Settings {
+  int32 version = 1;
+  Window window = 2;
+  Tabs tabs = 3;
+  Files files = 4;
+  Preferences preferences = 5;
+  UI ui = 6;
+  Trace trace = 7;
+  Perfetto perfetto = 8;
+  DeviceValidation device_validation = 9;
+  FuchsiaTracing fuchsia_tracing = 10;
+}
+
+// DeviceValidation contains the list of validated devices.
+message DeviceValidation {
+  message Device {
+    string serial = 1;
+    device.OS os = 2;
+    // The pre-release driver APK version code
+    string version = 3;
+  }
+
+  message Result {
+    bool passed = 1;
+  }
+
+  message ValidationEntry {
+    Device device = 1;
+    Result result = 2;
+    int64 last_seen = 3;
+  }
+  repeated ValidationEntry validation_entries = 1;
+}

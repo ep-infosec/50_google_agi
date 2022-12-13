@@ -1,0 +1,351 @@
+// Copyright (C) 2018 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Based off of the original vulkan.h header file which has the following
+// license.
+
+// Copyright (c) 2015 The Khronos Group Inc.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and/or associated documentation files (the
+// "Materials"), to deal in the Materials without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Materials, and to
+// permit persons to whom the Materials are furnished to do so, subject to
+// the following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Materials.
+//
+// THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+// MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+
+////////////
+// Buffer //
+////////////
+
+@internal class BufferInfo {
+  @unused VkBufferCreateFlags                    CreateFlags
+  @unused VkDeviceSize                           Size
+  @unused VkBufferUsageFlags                     Usage
+  @unused VkSharingMode                          SharingMode
+  @unused map!(u32, u32)                         QueueFamilyIndices
+  ref!DedicatedAllocationBufferImageCreateInfoNV DedicatedAllocationNV
+  @unused VkExternalMemoryHandleTypeFlags        ExternalHandleTypeFlags
+  @unused u64                                    OpaqueCaptureAddress
+}
+
+@internal class MutableDeviceGroupBinding {
+  ref!DeviceGroupBinding Binding
+}
+
+@internal class DeviceGroupBinding {
+  map!(u32, u32)                     Bindings
+}
+
+@internal class BufferObject {
+  @unused VkDevice                   Device
+  @unused VkBuffer                   VulkanHandle
+  @unused BufferInfo                 Info
+  ref!DeviceMemoryObject             Memory
+  VkDeviceSize                       MemoryOffset
+  map!(u64, VkSparseMemoryBind)      SparseMemoryBindings
+  @untracked @unused ref!QueueObject LastBoundQueue
+  @unused ref!VulkanDebugMarkerInfo  DebugInfo
+  VkMemoryRequirements               MemoryRequirements
+  // Vulkan 1.1 promoted from extension: VK_KHR_dedicated_allocation
+  ref!DedicatedRequirements          DedicatedRequirements
+  ref!DeviceGroupBinding             DeviceGroupBinding
+
+  // KHR_buffer_device_address
+  VkDeviceAddress                    BufferDeviceAddress
+}
+
+@indirect("VkDevice")
+@override
+cmd VkResult vkCreateBuffer(
+    VkDevice                     device,
+    const VkBufferCreateInfo*    pCreateInfo,
+    AllocationCallbacks          pAllocator,
+    VkBuffer*                    pBuffer) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if pCreateInfo == null { vkErrorNullPointer("VkBufferCreateInfo") }
+  buffer_create_info := pCreateInfo[0]
+
+
+  bufferInfo := BufferInfo(
+    CreateFlags:  buffer_create_info.flags,
+    Size:         buffer_create_info.size,
+    Usage:        buffer_create_info.usage,
+    SharingMode:  buffer_create_info.sharingMode,
+  )
+
+  if (buffer_create_info.sharingMode == VK_SHARING_MODE_CONCURRENT) {
+    queueFamilyIndices := buffer_create_info.pQueueFamilyIndices[
+    0:buffer_create_info.queueFamilyIndexCount]
+    for i in (0 .. buffer_create_info.queueFamilyIndexCount) {
+      bufferInfo.QueueFamilyIndices[i] = queueFamilyIndices[i]
+    }
+  }
+
+  // Handle pNext
+  if buffer_create_info.pNext != null {
+    numPNext := numberOfPNext(buffer_create_info.pNext)
+    next := MutableVoidPtr(as!void*(buffer_create_info.pNext))
+    for i in (0 .. numPNext) {
+      sType := as!const VkStructureType*(next.Ptr)[0]
+      switch sType {
+        case VK_STRUCTURE_TYPE_DEDICATED_ALLOCATION_BUFFER_CREATE_INFO_NV: {
+          ext := as!VkDedicatedAllocationBufferCreateInfoNV*(next.Ptr)[0]
+          bufferInfo.DedicatedAllocationNV = new!DedicatedAllocationBufferImageCreateInfoNV(
+            DedicatedAllocation: ext.dedicatedAllocation
+          )
+        }
+        case VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO: {
+          ext := as!VkExternalMemoryBufferCreateInfo*(next.Ptr)[0]
+          bufferInfo.ExternalHandleTypeFlags = ext.handleTypes
+        }
+        case VK_STRUCTURE_TYPE_BUFFER_OPAQUE_CAPTURE_ADDRESS_CREATE_INFO: {
+          ext := as!VkBufferOpaqueCaptureAddressCreateInfo*(next.Ptr)[0]
+          bufferInfo.OpaqueCaptureAddress = ext.opaqueCaptureAddress
+        }
+      }
+      next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+    }
+  }
+
+  buffer := ?
+  if pBuffer == null { vkErrorNullPointer("VkBuffer") }
+  pBuffer[0] = buffer
+  bufferObject := new!BufferObject(
+    Device:        device,
+    VulkanHandle:  buffer,
+    Info:          bufferInfo,
+  )
+
+  // If the vkCreateBuffer is inserted by GAPID (e.g. the staging buffer for
+  // reading framebuffer), an empty memory requirement struct will be returned.
+  bufferObject.MemoryRequirements = fetchBufferMemoryRequirements(device, buffer)
+
+  Buffers[buffer] = bufferObject
+
+  return ?
+}
+
+@indirect("VkDevice")
+cmd void vkDestroyBuffer(
+    VkDevice                     device,
+    VkBuffer                     buffer,
+    AllocationCallbacks          pAllocator) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if !(buffer in Buffers) { vkErrorInvalidBuffer(buffer) } else {
+    if (buffer != as!VkBuffer(0)) {
+      bufferObject := Buffers[buffer]
+      if (bufferObject.Memory != null) {
+        // If the memory is deleted first, then do not try to remove ourselves.
+        delete(bufferObject.Memory.BoundObjects,
+        as!u64(buffer))
+      }
+      delete(Buffers, buffer)
+    }
+  }
+}
+
+/////////////////
+// Buffer view //
+/////////////////
+
+@internal class BufferViewObject {
+  @unused VkDevice                  Device
+  @unused VkBufferView              VulkanHandle
+  @unused ref!BufferObject          Buffer
+  @unused VkFormat                  Format
+  @unused VkDeviceSize              Offset
+  @unused VkDeviceSize              Range
+  @unused ref!VulkanDebugMarkerInfo DebugInfo
+  // Do not track depedency for the following back-references.
+  @hidden @untrackedMap @untracked
+  map!(VkDescriptorSet, map!(u32, map!(u32, bool))) DescriptorUsers
+}
+
+// Buffer view functions
+@indirect("VkDevice")
+cmd VkResult vkCreateBufferView(
+    VkDevice                      device,
+    const VkBufferViewCreateInfo* pCreateInfo,
+    AllocationCallbacks           pAllocator,
+    VkBufferView*                 pView) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if pCreateInfo == null { vkErrorNullPointer("VkBufferViewCreateInfo") }
+  buffer_view_create_info := pCreateInfo[0]
+  // handle mapped memory range pNext
+  if buffer_view_create_info.pNext != null {
+    numPNext := numberOfPNext(buffer_view_create_info.pNext)
+    next := MutableVoidPtr(as!void*(buffer_view_create_info.pNext))
+    for i in (0 .. numPNext) {
+      sType := as!const VkStructureType*(next.Ptr)[0]
+      switch (sType) {
+      }
+      next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+    }
+  }
+  if !(buffer_view_create_info.buffer in Buffers) { vkErrorInvalidBuffer(buffer_view_create_info.buffer) }
+
+  handle := ?
+  bufferViewObject := new!BufferViewObject(
+    Device:        device,
+    VulkanHandle:  handle,
+    Buffer:        Buffers[buffer_view_create_info.buffer],
+    Format:        buffer_view_create_info.format,
+    Offset:        buffer_view_create_info.offset,
+    Range:         buffer_view_create_info.range)
+  if pView == null { vkErrorNullPointer("VkBufferView") }
+  pView[0] = handle
+  BufferViews[handle] = bufferViewObject
+
+  return ?
+}
+
+@indirect("VkDevice")
+cmd void vkDestroyBufferView(
+    VkDevice                     device,
+    VkBufferView                 bufferView,
+    AllocationCallbacks          pAllocator) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if bufferView in BufferViews {
+    viewObj := BufferViews[bufferView]
+
+    // Release the binding with descriptor sets
+    for _, vkDesSet, bindingAndIndices in viewObj.DescriptorUsers {
+      if vkDesSet in DescriptorSets {
+        desSetObj := DescriptorSets[vkDesSet]
+        for _, binding, indices in bindingAndIndices {
+          if binding in desSetObj.Bindings {
+            switch desSetObj.Bindings[binding].BindingType {
+              case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,
+                  VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: {
+                for _, index, _ in indices {
+                  if index in desSetObj.Bindings[binding].BufferViewBindings {
+                    if desSetObj.Bindings[binding].BufferViewBindings[index] == bufferView {
+                      desSetObj.Bindings[binding].BufferViewBindings[index] = as!VkBufferView(0)
+                    }
+                  }
+                }
+              }
+              default: {
+                // do nothing
+              }
+            }
+          }
+        }
+      }
+    }
+    delete(BufferViews, bufferView)
+  }
+}
+
+sub void BindBufferMemory(
+    VkBuffer       buffer,
+    VkDeviceMemory memory,
+    VkDeviceSize   memoryOffset,
+    ref!DeviceGroupBinding deviceGroupBinding) {
+  if !(memory in DeviceMemories) {
+    vkErrorInvalidDeviceMemory(memory)
+  } else {
+    if !(buffer in Buffers) {
+      vkErrorInvalidBuffer(buffer)
+    } else {
+      Buffers[buffer].Memory = DeviceMemories[memory]
+      Buffers[buffer].MemoryOffset = memoryOffset
+      Buffers[buffer].DeviceGroupBinding = deviceGroupBinding
+      DeviceMemories[memory].BoundObjects[as!u64(buffer)] = memoryOffset
+      if (Buffers[buffer].Info.DedicatedAllocationNV != null) && (DeviceMemories[memory].DedicatedAllocationNV == null) {
+        vkErrorExpectNVDedicatedlyAllocatedHandle("VkBuffer", as!u64(buffer))
+      }
+      if (Buffers[buffer].Info.DedicatedAllocationNV == null) && (DeviceMemories[memory].DedicatedAllocationNV != null) {
+        vkErrorExpectNVDedicatedlyAllocatedHandle("VkDeviceMemory", as!u64(memory))
+      }
+    }
+  }
+}
+
+@indirect("VkDevice")
+cmd VkResult vkBindBufferMemory(
+    VkDevice       device,
+    VkBuffer       buffer,
+    VkDeviceMemory memory,
+    VkDeviceSize   memoryOffset) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  BindBufferMemory(buffer, memory, memoryOffset, null)
+  return ?
+}
+
+// ----------------------------------------------------------------------------
+// Vulkan 1.1 Commands
+// ----------------------------------------------------------------------------
+
+////////////
+// Buffer //
+////////////
+
+sub void BindBufferMemory2(
+    VkDevice                      device,
+    u32                           bindInfoCount,
+    const VkBindBufferMemoryInfo* pBindInfos) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if pBindInfos == null {
+    vkErrorNullPointer("VkBindBufferMemoryInfo(KHR)")
+  } else {
+    infos := pBindInfos[0:bindInfoCount]
+    for i in (0 .. bindInfoCount) {
+      dg := MutableDeviceGroupBinding()
+      info := infos[i]
+      // handle pNext
+      if info.pNext != null {
+        numPNext := numberOfPNext(info.pNext)
+        next := MutableVoidPtr(as!void*(info.pNext))
+        for i in (0 .. numPNext) {
+          sType := as!const VkStructureType*(next.Ptr)[0]
+          switch sType {
+            case VK_STRUCTURE_TYPE_BIND_BUFFER_MEMORY_DEVICE_GROUP_INFO: {
+              ext := as!VkBindBufferMemoryDeviceGroupInfo*(next.Ptr)[0]
+              dg.Binding = new!DeviceGroupBinding()
+              indices := ext.pDeviceIndices[0:ext.deviceIndexCount]
+              for j in (0 .. ext.deviceIndexCount) {
+                dg.Binding.Bindings[j] = indices[j]
+              }
+            }
+          }
+          next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+        }
+      }
+      BindBufferMemory(info.buffer, info.memory, info.memoryOffset, dg.Binding)
+    }
+  }
+}
+
+@since("1.1")
+@indirect("VkDevice")
+cmd VkResult vkBindBufferMemory2(
+    VkDevice                      device,
+    u32                           bindInfoCount,
+    const VkBindBufferMemoryInfo* pBindInfos) {
+  BindBufferMemory2(device, bindInfoCount, pBindInfos)
+  return ?
+}

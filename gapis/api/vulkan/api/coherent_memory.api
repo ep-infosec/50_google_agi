@@ -1,0 +1,553 @@
+// Copyright (C) 2018 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Based off of the original vulkan.h header file which has the following
+// license.
+
+// Copyright (c) 2015 The Khronos Group Inc.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and/or associated documentation files (the
+// "Materials"), to deal in the Materials without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Materials, and to
+// permit persons to whom the Materials are furnished to do so, subject to
+// the following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Materials.
+//
+// THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+// MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+
+////////////
+// Memory //
+////////////
+
+sub void readCoherentMemory(ref!DeviceMemoryObject memory, VkDeviceSize readOffset, VkDeviceSize readSize) {
+  if IsMemoryCoherent(memory) && (memory.MappedLocation != null) {
+    offset_in_mapped := deviceMemoryOffsetToMappedSpace(memory, readOffset)
+    if offset_in_mapped != as!VkDeviceSize(0xFFFFFFFFFFFFFFFF) {
+      read_size_in_mapped := switch (
+      (readSize == as!VkDeviceSize(0xFFFFFFFFFFFFFFFF)) ||
+      ((offset_in_mapped + readSize) > memory.MappedSize)) {
+        case true:
+          memory.MappedSize - offset_in_mapped
+        case false:
+          readSize
+      }
+      if (offset_in_mapped + read_size_in_mapped) > offset_in_mapped {
+        readMappedCoherentMemory(memory.VulkanHandle, as!u64(offset_in_mapped),
+          as!size(read_size_in_mapped))
+      }
+    }
+  }
+}
+
+
+////////////
+// Buffer //
+////////////
+
+sub void readCoherentMemoryInBuffer(ref!BufferObject buffer) {
+  memPieces := getBufferBoundMemoryPiecesInRange(buffer, as!VkDeviceSize(0), as!VkDeviceSize(0xFFFFFFFFFFFFFFFF))
+  for _, _, mp in memPieces {
+    readCoherentMemory(mp.DeviceMemory, mp.MemoryOffset, mp.Size)
+  }
+}
+
+@spy_disabled
+sub void readMemoryInBuffer(ref!BufferObject buffer, VkDeviceSize readOffset, VkDeviceSize readSize) {
+  memPieces := getBufferBoundMemoryPiecesInRange(buffer, readOffset, readSize)
+  for _, _, mp in memPieces {
+    readCoherentMemory(mp.DeviceMemory, mp.MemoryOffset, mp.Size)
+    read(mp.DeviceMemory.Data[mp.MemoryOffset:mp.MemoryOffset+mp.Size])
+  }
+}
+
+@spy_disabled
+sub void writeMemoryInBuffer(ref!BufferObject buffer, VkDeviceSize offset, VkDeviceSize size) {
+  memPieces := getBufferBoundMemoryPiecesInRange(buffer, offset, size)
+  for _, _, mp in memPieces {
+    write(mp.DeviceMemory.Data[mp.MemoryOffset:mp.MemoryOffset+mp.Size])
+  }
+}
+
+// VkDescriptorBufferInfo binding
+sub void readCoherentMemoryInBufferBindings(map!(u32, ref!VkDescriptorBufferInfo) bufferBindings) {
+  n := len(bufferBindings)
+  rcb := LastBoundQueue.ReadCoherentBuffers
+  for i in (0 .. n) {
+    descBufferInfo := bufferBindings[as!u32(i)]
+    if descBufferInfo.Buffer != as!VkBuffer(0) {
+      if !(descBufferInfo.Buffer in rcb) {
+        if (descBufferInfo.Buffer in Buffers) {
+          rcb[descBufferInfo.Buffer] = true
+          readCoherentMemoryInBuffer(Buffers[descBufferInfo.Buffer])
+        }
+      }
+    }
+  }
+}
+
+@spy_disabled
+sub void readMemoryInBufferBindings(map!(u32, ref!VkDescriptorBufferInfo) bufferBindings, map!(u32, VkDeviceSize) bufferBindingOffsets) {
+  n := len(bufferBindings)
+  for i in (0 .. n) {
+    descBufferInfo := bufferBindings[as!u32(i)]
+    if descBufferInfo.Buffer != as!VkBuffer(0) {
+      if (descBufferInfo.Buffer in Buffers) {
+        offset := switch as!u32(i) in bufferBindingOffsets {
+          case true:
+            bufferBindingOffsets[as!u32(i)]
+          case false:
+            descBufferInfo.Offset
+        }
+        readMemoryInBuffer(Buffers[descBufferInfo.Buffer], offset, descBufferInfo.Range)
+      }
+    }
+  }
+}
+
+@spy_disabled
+sub void writeMemoryInBufferBindings(map!(u32, ref!VkDescriptorBufferInfo) bufferBindings, map!(u32, VkDeviceSize) bufferBindingOffsets) {
+  n := len(bufferBindings)
+  for i in (0 .. n) {
+    bufferBinding := bufferBindings[as!u32(i)]
+    if bufferBinding.Buffer != as!VkBuffer(0) {
+      if (bufferBinding.Buffer in Buffers) {
+        offset := switch as!u32(i) in bufferBindingOffsets {
+          case true:
+            bufferBindingOffsets[as!u32(i)]
+          case false:
+            bufferBinding.Offset
+        }
+        writeMemoryInBuffer(Buffers[bufferBinding.Buffer], offset, bufferBinding.Range)
+      }
+    }
+  }
+}
+
+// VkBufferView binding
+sub void readCoherentMemoryInBufferViewBindings(map!(u32, VkBufferView) bufferViews) {
+  rcb := LastBoundQueue.ReadCoherentBuffers
+  for _, _, v in bufferViews {
+    if v in BufferViews {
+      view := BufferViews[v]
+      if !(view.Buffer.VulkanHandle in rcb) {
+        if (view.Buffer.VulkanHandle in Buffers) {
+          LastBoundQueue.ReadCoherentBuffers[view.Buffer.VulkanHandle] = true
+          readCoherentMemoryInBuffer(view.Buffer)
+        }
+      }
+    }
+  }
+}
+
+@spy_disabled
+sub void readMemoryInBufferViewBindings(map!(u32, VkBufferView) bufferViews) {
+  for _, _, v in bufferViews {
+    if v in BufferViews {
+      view := BufferViews[v]
+      if (view.Buffer.VulkanHandle in Buffers) {
+        readMemoryInBuffer(view.Buffer, view.Offset, view.Range)
+      }
+    }
+  }
+}
+
+@spy_disabled
+sub void writeMemoryInBufferViewBindings(map!(u32, VkBufferView) bufferViews) {
+  for _, _, v in bufferViews {
+    if v in BufferViews {
+      view := BufferViews[v]
+      if (view.Buffer.VulkanHandle in Buffers) {
+        writeMemoryInBuffer(view.Buffer, view.Offset, view.Range)
+      }
+    }
+  }
+}
+
+///////////
+// Image //
+///////////
+
+sub void readCoherentMemoryInImage(ref!ImageObject image) {
+  if image != null {
+    for _, _, m in image.PlaneMemoryInfo {
+      mem := m.BoundMemory
+      if mem != null {
+        // Host access to image memory is only well-defined for images created with
+        // VK_IMAGE_TILING_LINEAR tiling and for image subresources of those images
+        // which are currently in either VK_IMAGE_LAYOUT_PREINITIALIZED or
+        // VK_IMAGE_LAYOUT_GENERAL layout.
+        // TODO: Complete the layout tracking logic then update this if statement
+        // to check the layout of the underlying image.
+        if image.Info.Tiling == VK_IMAGE_TILING_LINEAR {
+          readCoherentMemory(mem, m.BoundMemoryOffset, inferImageSize(image))
+        }
+      }
+    }
+  }
+}
+
+// VkImageSubresourceRange data
+@spy_disabled
+sub void accessImageSubresourceSlice(ref!ImageObject image, VkImageSubresourceRange rng, u32 baseDepth, u32 depthCount, bool isWrite) {
+  layerCount := imageSubresourceLayerCount(image, rng)
+  levelCount := imageSubresourceLevelCount(image, rng)
+
+  z0 := as!u64(baseDepth)
+
+  format := image.Info.Format
+  elementAndTexelBlockSize := getElementAndTexelBlockSize(format)
+  blockWidth := as!u64(elementAndTexelBlockSize.TexelBlockSize.Width)
+  blockHeight := as!u64(elementAndTexelBlockSize.TexelBlockSize.Height)
+
+  for _ , _ , aspectBit in unpackImageAspectFlags(image, rng.aspectMask) {
+    if !aspectBit in image.Aspects { vkErrorInvalidImageAspect(image.VulkanHandle, aspectBit) } else {
+    elementSize := getElementAndTexelBlockSizeForAspect(format, as!VkImageAspectFlagBits(aspectBit))
+    for _, i, layer in image.Aspects[aspectBit].Layers {
+      if (i >= rng.baseArrayLayer) && (i < rng.baseArrayLayer + layerCount) {
+        for _, k, level in layer.Levels {
+          if (k >= rng.baseMipLevel) && (k < rng.baseMipLevel + levelCount) {
+            z1 := switch (depthCount == VK_REMAINING_ARRAY_LAYERS) {
+              case true:
+                as!u64(level.Depth)
+              case false:
+                as!u64(baseDepth + depthCount)
+            }
+            imageLevelWidthInBlocks := as!u64(roundUpTo(level.Width, as!u32(blockWidth)))
+            imageLevelHeightInBlocks := as!u64(roundUpTo(level.Height, as!u32(blockHeight)))
+            depthPitch := switch level.LinearLayout {
+              case null:
+                imageLevelHeightInBlocks * imageLevelWidthInBlocks * as!u64(elementSize.ElementSize)
+              default:
+                as!u64(level.LinearLayout.depthPitch)
+            }
+            start := z0 * depthPitch
+            end := z1 * depthPitch
+            if isWrite {
+              write(level.Data[start:end])
+            } else {
+              read(level.Data[start:end])
+            }
+          }
+        }
+      }
+    }
+  }}
+}
+
+@spy_disabled
+sub void accessImageSubresource(ref!ImageObject image, VkImageSubresourceRange rng, bool isWrite) {
+  accessImageSubresourceSlice(image, rng, 0, VK_REMAINING_ARRAY_LAYERS, isWrite)
+}
+
+@spy_disabled
+sub void readImageSubresource(ref!ImageObject image, VkImageSubresourceRange rng) {
+  accessImageSubresource(image, rng, false)
+}
+
+@spy_disabled
+sub void writeImageSubresource(ref!ImageObject image, VkImageSubresourceRange rng) {
+  accessImageSubresource(image, rng, true)
+}
+
+sub bool is2DView3DImage(ref!ImageViewObject view) {
+  return ((view.Image.Info.ImageType == VK_IMAGE_TYPE_3D) &&
+      ((view.Type == VK_IMAGE_VIEW_TYPE_2D) || (view.Type == VK_IMAGE_VIEW_TYPE_2D_ARRAY)))
+}
+
+@spy_disabled
+sub void accessImageView(ref!ImageViewObject view, bool isWrite) {
+  if is2DView3DImage(view) {
+    rng := VkImageSubresourceRange(
+          aspectMask: view.SubresourceRange.aspectMask,
+          baseMipLevel: view.SubresourceRange.baseMipLevel,
+          levelCount: view.SubresourceRange.levelCount,
+          baseArrayLayer: 0,
+          layerCount: 1)
+    baseDepth := view.SubresourceRange.baseArrayLayer
+    depthCount := view.SubresourceRange.layerCount
+    accessImageSubresourceSlice(view.Image, rng, baseDepth, depthCount, isWrite)
+  } else {
+    accessImageSubresource(view.Image, view.SubresourceRange, isWrite)
+  }
+}
+
+@spy_disabled
+sub void readImageView(ref!ImageViewObject view) {
+  accessImageView(view, false)
+}
+
+@spy_disabled
+sub void writeImageView(ref!ImageViewObject view) {
+  accessImageView(view, true)
+}
+
+@spy_disabled
+sub void updateImageViewQueue(ref!ImageViewObject view) {
+  if is2DView3DImage(view) {
+    rng := VkImageSubresourceRange(
+          aspectMask: view.SubresourceRange.aspectMask,
+          baseMipLevel: view.SubresourceRange.baseMipLevel,
+          levelCount: view.SubresourceRange.levelCount,
+          baseArrayLayer: 0,
+          layerCount: 1)
+    updateImageQueue(view.Image, rng)
+  } else {
+    updateImageQueue(view.Image, view.SubresourceRange)
+  }
+}
+
+// VkImageViews used as Framebuffer attachments are handled in
+// renderpass_framebuffer.api
+@server_disabled
+sub void readCoherentMemoryInImageBindings(map!(u32, ref!VkDescriptorImageInfo) imageBindings) {
+  for _, _, v in imageBindings {
+    _ = Samplers[v.Sampler]
+    if v.ImageView != as!VkImageView(0) {
+      if (v.ImageView in ImageViews) {
+        view := ImageViews[v.ImageView]
+        updateImageViewQueue(view)
+        imageObj := view.Image
+        readCoherentMemoryInImage(imageObj)
+      }
+    }
+  }
+}
+
+@spy_disabled
+sub void readMemoryInImageBindings(map!(u32, ref!VkDescriptorImageInfo) imageBindings) {
+  for _, _, v in imageBindings {
+    _ = Samplers[v.Sampler]
+    if v.ImageView != as!VkImageView(0) {
+      if (v.ImageView in ImageViews) {
+        view := ImageViews[v.ImageView]
+        updateImageViewQueue(view)
+        readImageView(view)
+      }
+    }
+  }
+}
+
+@spy_disabled
+sub void writeMemoryInImageBindings(map!(u32, ref!VkDescriptorImageInfo) imageBindings) {
+  for _, _, v in imageBindings {
+    _ = Samplers[v.Sampler]
+    if v.ImageView != as!VkImageView(0) {
+      if (v.ImageView in ImageViews) {
+        view := ImageViews[v.ImageView]
+        updateImageViewQueue(view)
+        writeImageView(view)
+      }
+    }
+  }
+}
+
+@server_disabled
+sub void readCoherentMemoryInDescriptor(ref!DescriptorSetObject descriptor_set, u32 b, u32 arrayCount) {
+  if descriptor_set != null {
+    binding := descriptor_set.Bindings[b]
+    if binding != null {
+      switch binding.BindingType {
+        case
+          VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+          VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+            readCoherentMemoryInBufferBindings(binding.BufferBinding)
+        case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,
+          VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+            readCoherentMemoryInBufferViewBindings(binding.BufferViewBindings)
+        case
+          VK_DESCRIPTOR_TYPE_SAMPLER,
+          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+          VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+          VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+          VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+          readCoherentMemoryInImageBindings(binding.ImageBinding)
+        default: {}
+      }
+    }
+  }
+}
+
+///////////////////
+// DescriptorSet //
+///////////////////
+@spy_disabled
+sub void readMemoryInDescriptor(ref!DescriptorSetObject descriptor_set, u32 b, u32 arrayCount, map!(u32, VkDeviceSize) bufferBindingOffsets) {
+  if descriptor_set != null {
+    binding := descriptor_set.Bindings[b]
+    if binding != null {
+      switch binding.BindingType {
+        case
+          VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+          VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+            readMemoryInBufferBindings(binding.BufferBinding, bufferBindingOffsets)
+        case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,
+          VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+            readMemoryInBufferViewBindings(binding.BufferViewBindings)
+        case
+          VK_DESCRIPTOR_TYPE_SAMPLER,
+          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+          VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+          VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+          VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+          readMemoryInImageBindings(binding.ImageBinding)
+        default: {}
+      }
+    }
+  }
+}
+
+@spy_disabled
+sub void writeMemoryInDescriptor(ref!DescriptorSetObject descriptor_set, u32 b, u32 arrayCount, map!(u32, VkDeviceSize) bufferBindingOffsets) {
+  if descriptor_set != null {
+    binding := descriptor_set.Bindings[b]
+    if binding != null {
+      switch binding.BindingType {
+        case
+          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+            writeMemoryInBufferBindings(binding.BufferBinding, bufferBindingOffsets)
+        case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+            writeMemoryInBufferViewBindings(binding.BufferViewBindings)
+        case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+            writeMemoryInImageBindings(binding.ImageBinding)
+        default: {}
+      }
+    }
+  }
+}
+
+
+/////////////////////
+// Bound resources //
+/////////////////////
+
+// Bound descriptor sets
+sub void readWriteMemoryInBoundDescriptorSets(
+    map!(u32, DescriptorUsage) usedDescriptors,
+    map!(u32, ref!DescriptorSetObject) descriptorSets,
+    map!(u32, map!(u32, map!(u32, VkDeviceSize))) bufferBindingOffsets) {
+
+  for _, _, desc in usedDescriptors {
+    if !(desc.Set in descriptorSets) { vkErrInvalidDescriptorArrayElement(as!u64(desc.Set), desc.Binding, desc.DescriptorCount) } else {
+      descriptorSet := descriptorSets[desc.Set]
+      if descriptorSet != null {
+        readCoherentMemoryInDescriptor(descriptorSet, desc.Binding, desc.DescriptorCount)
+        // Do not create a temporary for these bufferBindingOffsets, since the temporary
+        // will be created (an unused) on trace side as well.
+        readMemoryInDescriptor(descriptorSet, desc.Binding, desc.DescriptorCount, bufferBindingOffsets[desc.Set][desc.Binding])
+        writeMemoryInDescriptor(descriptorSet, desc.Binding, desc.DescriptorCount, bufferBindingOffsets[desc.Set][desc.Binding])
+      }
+    }
+  }
+}
+
+@server_disabled
+sub void readCoherentMemoryInCurrentPipelineBoundVertexBuffers(u32 vertexCount, u32 instanceCount, u32 firstVertex, u32 firstInstance) {
+  ldi := lastDrawInfo()
+  for _ , _ , vertex_binding in ldi.GraphicsPipeline.VertexInputState.BindingDescriptions {
+    bound_vertex_buffer := ldi.BoundVertexBuffers[vertex_binding.binding]
+    backing_buf := bound_vertex_buffer.Buffer
+    readCoherentMemoryInBuffer(backing_buf)
+  }
+}
+
+// Bound vertex/index buffers
+sub void readMemoryInCurrentPipelineBoundVertexBuffers(u32 vertexCount, u32 instanceCount, u32 firstVertex, u32 firstInstance) {
+    readCoherentMemoryInCurrentPipelineBoundVertexBuffers(vertexCount, instanceCount, firstVertex, firstInstance)
+    trackMemoryInCurrentPipelineBoundVertexBuffers(vertexCount, instanceCount, firstVertex, firstInstance)
+}
+
+@spy_disabled
+sub void trackMemoryInCurrentPipelineBoundVertexBuffers(u32 vertexCount, u32 instanceCount, u32 firstVertex, u32 firstInstance) {
+  // For details on how to compute the vertex buffer memory ranges, see the
+  // pseudo-code at the end of section "Vertex Attribute Divisor in Instanced
+  // Rendering" in the Vulkan specification.
+  ldi := lastDrawInfo()
+  vertexInputState := ldi.GraphicsPipeline.VertexInputState
+  if vertexInputState != null {
+    for _ , _ , vertex_binding in vertexInputState.BindingDescriptions {
+      if vertex_binding.binding in ldi.BoundVertexBuffers {
+        bound_vertex_buffer := ldi.BoundVertexBuffers[vertex_binding.binding]
+        backing_buf := bound_vertex_buffer.Buffer
+        if backing_buf.Memory != null {
+          start_vertex := switch vertex_binding.inputRate {
+            case VK_VERTEX_INPUT_RATE_VERTEX:
+              firstVertex
+            case VK_VERTEX_INPUT_RATE_INSTANCE:
+              firstInstance
+          }
+
+          num_vertices := switch vertex_binding.inputRate {
+            case VK_VERTEX_INPUT_RATE_VERTEX:
+              vertexCount
+            case VK_VERTEX_INPUT_RATE_INSTANCE:
+              switch vertexInputState.DivisorDescriptions != null {
+                case false:
+                  instanceCount
+                case true:
+                  switch vertex_binding.binding in vertexInputState.DivisorDescriptions.VertexBindingDivisors {
+                  case false:
+                    instanceCount
+                  case true:
+                    switch vertexInputState.DivisorDescriptions.VertexBindingDivisors[vertex_binding.binding].divisor {
+                      case 0:
+                        as!u32(1) // If divisor is zero, use only one instance
+                      default:
+                        (instanceCount / vertexInputState.DivisorDescriptions.VertexBindingDivisors[vertex_binding.binding].divisor)
+                    }
+                }
+              }
+          }
+          if num_vertices > 0 {
+            vertex_attrib := vertexInputState.AttributeDescriptions[vertex_binding.binding]
+            vertex_attrib_size := getElementAndTexelBlockSize(vertex_attrib.format).ElementSize
+            start_offset := bound_vertex_buffer.Offset + as!VkDeviceSize((start_vertex * vertex_binding.stride) + vertex_attrib.offset)
+            num := switch vertexCount == 0xFFFFFFFF {
+              case true:
+                backing_buf.Info.Size - start_offset
+              case false:
+                as!VkDeviceSize(((num_vertices - 1) * vertex_binding.stride) + vertex_attrib_size)
+            }
+            readMemoryInBuffer(backing_buf, start_offset, num)
+          }
+        }
+      }
+    }
+  }
+}
+
+
+//////////
+// Util //
+//////////
+
+sub bool IsMemoryCoherent(ref!DeviceMemoryObject memory) {
+  physical_device := PhysicalDevices[Devices[memory.Device].PhysicalDevice]
+  return 0 != (as!u32(physical_device.MemoryProperties.memoryTypes[memory.MemoryTypeIndex].propertyFlags) &
+  as!u32(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
+}

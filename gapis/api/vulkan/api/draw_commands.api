@@ -1,0 +1,586 @@
+// Copyright (C) 2018 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Based off of the original vulkan.h header file which has the following
+// license.
+
+// Copyright (c) 2015 The Khronos Group Inc.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and/or associated documentation files (the
+// "Materials"), to deal in the Materials without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Materials, and to
+// permit persons to whom the Materials are furnished to do so, subject to
+// the following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Materials.
+//
+// THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+// MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+
+@internal
+class BoundIndexBuffer {
+  VkIndexType Type
+  BoundBuffer BoundBuffer
+}
+
+@internal class
+vkCmdBindIndexBufferArgs {
+  VkBuffer     Buffer
+  VkDeviceSize Offset
+  VkIndexType  IndexType
+}
+
+
+sub void dovkCmdBindIndexBuffer(ref!vkCmdBindIndexBufferArgs buffer) {
+  if !(buffer.Buffer in Buffers) {
+    vkErrorInvalidBuffer(buffer.Buffer)
+  } else {
+    buff := Buffers[buffer.Buffer]
+    ldi := lastDrawInfo()
+    ldi.BoundIndexBuffer = new!BoundIndexBuffer(buffer.IndexType,
+      BoundBuffer(buff, buffer.Offset, 0))
+    buff.LastBoundQueue = LastBoundQueue
+  }
+}
+
+
+@indirect("VkCommandBuffer", "VkDevice")
+@threadsafe
+cmd void vkCmdBindIndexBuffer(
+    VkCommandBuffer commandBuffer,
+    VkBuffer        buffer,
+    VkDeviceSize    offset,
+    VkIndexType     indexType) {
+  if !(commandBuffer in CommandBuffers) {
+    vkErrorInvalidCommandBuffer(commandBuffer)
+  } else {
+    if !(buffer in Buffers) { vkErrorInvalidBuffer(buffer) }
+    args := new!vkCmdBindIndexBufferArgs(
+      Buffer:     buffer,
+      Offset:     offset,
+      IndexType:  indexType
+    )
+    cmdBuf := CommandBuffers[commandBuffer]
+
+    mapPos := as!u32(len(cmdBuf.BufferCommands.vkCmdBindIndexBuffer))
+    cmdBuf.BufferCommands.vkCmdBindIndexBuffer[mapPos] = args
+
+    AddCommand(commandBuffer, cmd_vkCmdBindIndexBuffer, mapPos)
+  }
+}
+
+@internal class
+vkCmdBindVertexBuffersArgs {
+  u32                     FirstBinding
+  u32                     BindingCount
+  map!(u32, VkBuffer)     Buffers
+  map!(u32, VkDeviceSize) Offsets
+}
+
+@internal
+class CmdBindBuffer {
+  map!(u32, BoundBuffer) BoundBuffers
+}
+
+sub void dovkCmdBindVertexBuffers(ref!vkCmdBindVertexBuffersArgs bind) {
+  n := len(bind.Buffers)
+  for i in (0 .. n) {
+    v := bind.Buffers[as!u32(i)]
+    if !(v in Buffers) {
+      vkErrorInvalidBuffer(v)
+    } else {
+      ldi := lastDrawInfo()
+      ldi.BoundVertexBuffers[as!u32(i) + bind.FirstBinding] = BoundBuffer(
+        Buffers[v], bind.Offsets[as!u32(i)],
+        Buffers[v].Info.Size - bind.Offsets[as!u32(i)])
+      Buffers[v].LastBoundQueue = LastBoundQueue
+    }
+  }
+}
+
+@indirect("VkCommandBuffer", "VkDevice")
+@threadsafe
+cmd void vkCmdBindVertexBuffers(
+    VkCommandBuffer     commandBuffer,
+    u32                 firstBinding,
+    u32                 bindingCount,
+    const VkBuffer*     pBuffers,
+    const VkDeviceSize* pOffsets) {
+  if !(commandBuffer in CommandBuffers) {
+    vkErrorInvalidCommandBuffer(commandBuffer)
+  } else {
+    args := new!vkCmdBindVertexBuffersArgs(
+      FirstBinding:  firstBinding,
+      BindingCount:  bindingCount
+    )
+    buffers := pBuffers[0:bindingCount]
+    offsets := pOffsets[0:bindingCount]
+    for i in (0 .. bindingCount) {
+      if !(buffers[i] in Buffers) { vkErrorInvalidBuffer(buffers[i]) }
+      args.Buffers[i] = buffers[i]
+      args.Offsets[i] = offsets[i]
+    }
+    cmdBuf := CommandBuffers[commandBuffer]
+    mapPos := as!u32(len(cmdBuf.BufferCommands.vkCmdBindVertexBuffers))
+    cmdBuf.BufferCommands.vkCmdBindVertexBuffers[mapPos] = args
+
+    AddCommand(commandBuffer, cmd_vkCmdBindVertexBuffers, mapPos)
+  }
+}
+
+@internal class vkCmdDrawArgs {
+  u32 VertexCount
+  u32 InstanceCount
+  u32 FirstVertex
+  u32 FirstInstance
+}
+
+sub void dovkCmdDraw(ref!vkCmdDrawArgs draw) {
+  readDrawState()
+  useRenderPass()
+
+  readWriteMemoryInBoundGraphicsDescriptorSets()
+  readMemoryInCurrentPipelineBoundVertexBuffers(draw.VertexCount, draw.InstanceCount, draw.FirstVertex, draw.FirstInstance)
+  clearLastDrawInfoDrawCommandParameters()
+  ldi := lastDrawInfo()
+  ldi.CommandParameters.Draw = draw
+}
+
+@indirect("VkCommandBuffer", "VkDevice")
+@executed_draw
+@threadsafe
+cmd void vkCmdDraw(
+    VkCommandBuffer commandBuffer,
+    u32             vertexCount,
+    u32             instanceCount,
+    u32             firstVertex,
+    u32             firstInstance) {
+  if !(commandBuffer in CommandBuffers) {
+    vkErrorInvalidCommandBuffer(commandBuffer)
+  } else {
+    args := new!vkCmdDrawArgs(vertexCount, instanceCount, firstVertex, firstInstance)
+
+    cmdBuf := CommandBuffers[commandBuffer]
+    mapPos := as!u32(len(cmdBuf.BufferCommands.vkCmdDraw))
+    cmdBuf.BufferCommands.vkCmdDraw[mapPos] = args
+
+    AddCommand(commandBuffer, cmd_vkCmdDraw, mapPos)
+  }
+}
+
+@internal class
+vkCmdDrawIndexedArgs {
+  u32 IndexCount
+  u32 InstanceCount
+  u32 FirstIndex
+  s32 VertexOffset
+  u32 FirstInstance
+}
+
+@server_disabled
+sub void readCoherentMemoryInBoundIndexBuffer() {
+  lastDraw := lastDrawInfo()
+  indexBuffer := lastDraw.BoundIndexBuffer.BoundBuffer.Buffer
+  readCoherentMemoryInBuffer(indexBuffer)
+}
+
+@spy_disabled
+sub void readBoundIndexBuffer(u32 indexCount, u32 firstIndex) {
+  // Loop through the index buffer, and find the low and high
+  // vertices. Then read all of the applicable vertex buffers.
+  lastDraw := lastDrawInfo()
+  indexBuffer := lastDraw.BoundIndexBuffer.BoundBuffer.Buffer
+  indexSize := switch (lastDraw.BoundIndexBuffer.Type) {
+    case VK_INDEX_TYPE_UINT8_EXT:
+      as!VkDeviceSize(1)
+    case VK_INDEX_TYPE_UINT16:
+      as!VkDeviceSize(2)
+    case VK_INDEX_TYPE_UINT32:
+      as!VkDeviceSize(4)
+  }
+  numBytes := as!VkDeviceSize(indexCount) * indexSize
+  startOffset := lastDraw.BoundIndexBuffer.BoundBuffer.Offset + (indexSize * as!VkDeviceSize(firstIndex))
+
+  // Read the data of the index buffer.
+  readMemoryInBuffer(indexBuffer, startOffset, numBytes)
+}
+
+sub void dovkCmdDrawIndexed(ref!vkCmdDrawIndexedArgs draw) {
+  readDrawState()
+  useRenderPass()
+  readCoherentMemoryInBoundIndexBuffer()
+  readBoundIndexBuffer(draw.IndexCount, draw.FirstIndex)
+  // Read the whole vertex buffer.
+  readMemoryInCurrentPipelineBoundVertexBuffers(0xFFFFFFFF, draw.InstanceCount, 0, draw.FirstInstance)
+  readWriteMemoryInBoundGraphicsDescriptorSets()
+  clearLastDrawInfoDrawCommandParameters()
+  ldi := lastDrawInfo()
+  ldi.CommandParameters.DrawIndexed = draw
+}
+
+@indirect("VkCommandBuffer", "VkDevice")
+@executed_draw
+@threadsafe
+cmd void vkCmdDrawIndexed(
+    VkCommandBuffer commandBuffer,
+    u32             indexCount,
+    u32             instanceCount,
+    u32             firstIndex,
+    s32             vertexOffset,
+    u32             firstInstance) {
+  if !(commandBuffer in CommandBuffers) {
+    vkErrorInvalidCommandBuffer(commandBuffer)
+  } else {
+    args := new!vkCmdDrawIndexedArgs(
+      IndexCount:     indexCount,
+      InstanceCount:  instanceCount,
+      FirstIndex:     firstIndex,
+      VertexOffset:   vertexOffset,
+      FirstInstance:  firstInstance
+    )
+
+    cmdBuf := CommandBuffers[commandBuffer]
+    mapPos := as!u32(len(cmdBuf.BufferCommands.vkCmdDrawIndexed))
+    cmdBuf.BufferCommands.vkCmdDrawIndexed[mapPos] = args
+
+    AddCommand(commandBuffer, cmd_vkCmdDrawIndexed, mapPos)
+  }
+}
+
+@internal class vkCmdDrawIndirectArgs {
+  VkBuffer     Buffer
+  VkDeviceSize Offset
+  u32          DrawCount
+  u32          Stride
+}
+
+sub void readIndirectDrawBuffer(VkBuffer buf, VkDeviceSize offset, u32 drawCount, u32 stride) {
+  if !(buf in Buffers) {
+    vkErrorInvalidBuffer(buf)
+  } else {
+    command_size := as!VkDeviceSize(16)
+    indirect_buffer_read_size := as!VkDeviceSize((drawCount - 1) * stride) + command_size
+    readMemoryInBuffer(Buffers[buf], offset, indirect_buffer_read_size)
+    readCoherentMemoryInBuffer(Buffers[buf])
+  }
+}
+
+sub void dovkCmdDrawIndirect(ref!vkCmdDrawIndirectArgs draw) {
+  useRenderPass()
+  if draw.DrawCount > 0 {
+    readWriteMemoryInBoundGraphicsDescriptorSets()
+    readIndirectDrawBuffer(draw.Buffer, draw.Offset, draw.DrawCount, draw.Stride)
+    // Read through all the vertex buffers, as we cannot assume the buffer given to indirect draw is host
+    readMemoryInCurrentPipelineBoundVertexBuffers(0xFFFFFFFF, 0xFFFFFFFF, 0, 0)
+    clearLastDrawInfoDrawCommandParameters()
+    ldi := lastDrawInfo()
+    ldi.CommandParameters.DrawIndirect = draw
+  }
+}
+
+@indirect("VkCommandBuffer", "VkDevice")
+@executed_draw
+@threadsafe
+cmd void vkCmdDrawIndirect(
+    VkCommandBuffer commandBuffer,
+    VkBuffer        buffer,
+    VkDeviceSize    offset,
+    u32             drawCount,
+    u32             stride) {
+  if !(commandBuffer in CommandBuffers) {
+    vkErrorInvalidCommandBuffer(commandBuffer)
+  } else {
+    if !(buffer in Buffers) { vkErrorInvalidBuffer(buffer) }
+    args := new!vkCmdDrawIndirectArgs(buffer, offset, drawCount, stride)
+
+    cmdBuf := CommandBuffers[commandBuffer]
+
+    mapPos := as!u32(len(cmdBuf.BufferCommands.vkCmdDrawIndirect))
+    cmdBuf.BufferCommands.vkCmdDrawIndirect[mapPos] = args
+
+    AddCommand(commandBuffer, cmd_vkCmdDrawIndirect, mapPos)
+  }
+}
+
+@internal class vkCmdDrawIndexedIndirectArgs {
+  VkBuffer     Buffer
+  VkDeviceSize Offset
+  u32          DrawCount
+  u32          Stride
+}
+
+sub void readIndexedIndirectDrawBuffer(VkBuffer buf, VkDeviceSize offset, u32 drawCount, u32 stride ) {
+    if !(buf in Buffers) {
+      vkErrorInvalidBuffer(buf)
+    } else {
+      command_size := as!VkDeviceSize(16)
+      indirect_buffer_read_size := as!VkDeviceSize((drawCount - 1) * stride) + command_size
+      readCoherentMemoryInBuffer(Buffers[buf])
+      readMemoryInBuffer(Buffers[buf], offset, indirect_buffer_read_size)
+      // Read through the whole index buffer.
+      indexBuffer := lastDrawInfo().BoundIndexBuffer.BoundBuffer.Buffer
+      readCoherentMemoryInBuffer(indexBuffer)
+      readMemoryInBuffer(indexBuffer, 0, indexBuffer.Info.Size)
+    }
+}
+
+sub void dovkCmdDrawIndexedIndirect(ref!vkCmdDrawIndexedIndirectArgs draw) {
+  useRenderPass()
+  if draw.DrawCount > 0 {
+    ldi := lastDrawInfo()
+    readWriteMemoryInBoundGraphicsDescriptorSets()
+    readCoherentMemoryInBuffer(Buffers[draw.Buffer])
+    readIndexedIndirectDrawBuffer(draw.Buffer, draw.Offset, draw.DrawCount, draw.Stride)
+
+    // Read through all the vertex buffers.
+    readMemoryInCurrentPipelineBoundVertexBuffers(0xFFFFFFFF, 0xFFFFFFFF, 0, 0)
+    clearLastDrawInfoDrawCommandParameters()
+    ldi.CommandParameters.DrawIndexedIndirect = draw
+  }
+}
+
+@indirect("VkCommandBuffer", "VkDevice")
+@executed_draw
+@threadsafe
+cmd void vkCmdDrawIndexedIndirect(
+    VkCommandBuffer commandBuffer,
+    VkBuffer        buffer,
+    VkDeviceSize    offset,
+    u32             drawCount,
+    u32             stride) {
+  if !(commandBuffer in CommandBuffers) {
+    vkErrorInvalidCommandBuffer(commandBuffer)
+  } else {
+    if !(buffer in Buffers) { vkErrorInvalidBuffer(buffer) }
+    args := new!vkCmdDrawIndexedIndirectArgs(buffer, offset, drawCount, stride)
+
+    cmdBuf := CommandBuffers[commandBuffer]
+    mapPos := as!u32(len(cmdBuf.BufferCommands.vkCmdDrawIndexedIndirect))
+    cmdBuf.BufferCommands.vkCmdDrawIndexedIndirect[mapPos] = args
+
+    AddCommand(commandBuffer, cmd_vkCmdDrawIndexedIndirect, mapPos)
+  }
+}
+
+@internal class vkCmdDispatchArgs {
+  u32 GroupCountX,
+  u32 GroupCountY,
+  u32 GroupCountZ
+}
+
+sub void dovkCmdDispatch(ref!vkCmdDispatchArgs args) {
+  readComputeState()
+  readWriteMemoryInBoundComputeDescriptorSets()
+
+  clearLastComputeInfoDispatchCommandParameters()
+  lci := lastComputeInfo()
+  lci.CommandParameters.Dispatch = args
+}
+
+@indirect("VkCommandBuffer", "VkDevice")
+@executed_dispatch
+@threadsafe
+cmd void vkCmdDispatch(
+    VkCommandBuffer commandBuffer,
+    u32             groupCountX,
+    u32             groupCountY,
+    u32             groupCountZ) {
+  if !(commandBuffer in CommandBuffers) {
+    vkErrorInvalidCommandBuffer(commandBuffer)
+  } else {
+    args := new!vkCmdDispatchArgs(groupCountX, groupCountY, groupCountZ)
+
+    cmdBuf := CommandBuffers[commandBuffer]
+    mapPos := as!u32(len(cmdBuf.BufferCommands.vkCmdDispatch))
+    cmdBuf.BufferCommands.vkCmdDispatch[mapPos] = args
+
+    AddCommand(commandBuffer, cmd_vkCmdDispatch, mapPos)
+  }
+}
+
+@internal
+class vkCmdDispatchIndirectArgs {
+  VkBuffer     Buffer
+  VkDeviceSize Offset
+}
+
+sub void readIndirectDispatchBuffer(VkBuffer buf, VkDeviceSize offset) {
+  command_size := as!VkDeviceSize(12)
+  readCoherentMemoryInBuffer(Buffers[buf])
+  readMemoryInBuffer(Buffers[buf], offset, command_size)
+}
+
+sub void dovkCmdDispatchIndirect(ref!vkCmdDispatchIndirectArgs dispatch) {
+  readComputeState()
+  readIndirectDispatchBuffer(dispatch.Buffer, dispatch.Offset)
+  readWriteMemoryInBoundComputeDescriptorSets()
+
+  clearLastComputeInfoDispatchCommandParameters()
+  lci := lastComputeInfo()
+  lci.CommandParameters.DispatchIndirect = dispatch
+}
+
+@indirect("VkCommandBuffer", "VkDevice")
+@executed_dispatch
+@threadsafe
+cmd void vkCmdDispatchIndirect(
+    VkCommandBuffer commandBuffer,
+    VkBuffer        buffer,
+    VkDeviceSize    offset) {
+  if !(commandBuffer in CommandBuffers) {
+    vkErrorInvalidCommandBuffer(commandBuffer)
+  } else {
+    if !(buffer in Buffers) { vkErrorInvalidBuffer(buffer) }
+    args := new!vkCmdDispatchIndirectArgs(buffer, offset)
+
+    cmdBuf := CommandBuffers[commandBuffer]
+    mapPos := as!u32(len(cmdBuf.BufferCommands.vkCmdDispatchIndirect))
+    cmdBuf.BufferCommands.vkCmdDispatchIndirect[mapPos] = args
+
+    AddCommand(commandBuffer, cmd_vkCmdDispatchIndirect, mapPos)
+  }
+}
+
+sub void readWriteMemoryInBoundGraphicsDescriptorSets() {
+  ldi := lastDrawInfo()
+  readWriteMemoryInBoundDescriptorSets(
+    ldi.GraphicsPipeline.UsedDescriptors,
+    ldi.DescriptorSets,
+    ldi.BufferBindingOffsets)
+}
+
+sub void readWriteMemoryInBoundComputeDescriptorSets() {
+  lci := lastComputeInfo()
+  readWriteMemoryInBoundDescriptorSets(
+    lci.ComputePipeline.UsedDescriptors,
+    lci.DescriptorSets,
+    lci.BufferBindingOffsets)
+}
+
+@spy_disabled
+sub void readComputeState() {
+  readPushConstants(VK_PIPELINE_BIND_POINT_COMPUTE)
+}
+
+sub bool hasDynamicState(ref!GraphicsPipelineObject pipeline, VkDynamicState dynamicState) {
+  return (pipeline.DynamicState != null) && pipeline.DynamicState.Contains[dynamicState]
+}
+
+@spy_disabled
+sub void readDrawState() {
+  info := lastDrawInfo()
+  pipeline := info.GraphicsPipeline
+
+  dyn := lastDynamicPipelineState()
+
+  // read all viewports
+  if hasDynamicState(pipeline, VK_DYNAMIC_STATE_VIEWPORT) {
+    _ = len(dyn.Viewports)
+  } else {
+    if pipeline.ViewportState != null {
+      _ = len(pipeline.ViewportState.Viewports)
+    }
+  }
+
+  // read all scissors
+  if hasDynamicState(pipeline, VK_DYNAMIC_STATE_SCISSOR) {
+    _ = len(dyn.Scissors)
+  } else {
+    if pipeline.ViewportState != null {
+      _ = len(pipeline.ViewportState.Scissors)
+    }
+  }
+
+  // read line width
+  if hasDynamicState(pipeline, VK_DYNAMIC_STATE_LINE_WIDTH) {
+    _ = dyn.LineWidth
+  } else {
+    _ = pipeline.RasterizationState.LineWidth
+  }
+
+  // read line stipple (extension: VK_EXT_line_rasterization)
+  if hasDynamicState(pipeline, VK_DYNAMIC_STATE_LINE_STIPPLE_EXT) {
+    _ = dyn.LineStippleFactor
+    _ = dyn.LineStipplePattern
+  } else if pipeline.RasterizationState.PipelineRasterizationLineStateCreateInfoEXT != null {
+    _ = pipeline.RasterizationState.PipelineRasterizationLineStateCreateInfoEXT.LineStippleFactor
+    _ = pipeline.RasterizationState.PipelineRasterizationLineStateCreateInfoEXT.LineStipplePattern
+  }
+
+  // read depth bias
+  if hasDynamicState(pipeline, VK_DYNAMIC_STATE_DEPTH_BIAS) {
+    _ = dyn.DepthBiasConstantFactor
+    _ = dyn.DepthBiasClamp
+    _ = dyn.DepthBiasSlopeFactor
+  } else {
+    _ = pipeline.RasterizationState.DepthBiasConstantFactor
+    _ = pipeline.RasterizationState.DepthBiasClamp
+    _ = pipeline.RasterizationState.DepthBiasSlopeFactor
+  }
+
+  // read blend constants
+  if hasDynamicState(pipeline, VK_DYNAMIC_STATE_BLEND_CONSTANTS) {
+    _ = dyn.BlendConstants[0]
+    _ = dyn.BlendConstants[1]
+    _ = dyn.BlendConstants[2]
+    _ = dyn.BlendConstants[3]
+  } else {
+    if pipeline.ColorBlendState != null {
+      _ = pipeline.ColorBlendState.BlendConstants[0]
+      _ = pipeline.ColorBlendState.BlendConstants[1]
+      _ = pipeline.ColorBlendState.BlendConstants[2]
+      _ = pipeline.ColorBlendState.BlendConstants[3]
+    }
+  }
+
+  // read depth bounds
+  if hasDynamicState(pipeline, VK_DYNAMIC_STATE_BLEND_CONSTANTS) {
+    _ = dyn.MinDepthBounds
+    _ = dyn.MaxDepthBounds
+  } else {
+    if pipeline.DepthState != null {
+      _ = pipeline.DepthState.MinDepthBounds
+      _ = pipeline.DepthState.MaxDepthBounds
+    }
+  }
+
+  // read stencil state
+  if hasDynamicState(pipeline, VK_DYNAMIC_STATE_BLEND_CONSTANTS) {
+    _ = dyn.StencilFront.compareMask
+    _ = dyn.StencilFront.writeMask
+    _ = dyn.StencilFront.reference
+    _ = dyn.StencilBack.compareMask
+    _ = dyn.StencilBack.writeMask
+    _ = dyn.StencilBack.reference
+  } else {
+    if pipeline.DepthState != null {
+      _ = pipeline.DepthState.Front.compareMask
+      _ = pipeline.DepthState.Front.writeMask
+      _ = pipeline.DepthState.Front.reference
+      _ = pipeline.DepthState.Back.compareMask
+      _ = pipeline.DepthState.Back.writeMask
+      _ = pipeline.DepthState.Back.reference
+    }
+  }
+
+  readPushConstants(VK_PIPELINE_BIND_POINT_GRAPHICS)
+}

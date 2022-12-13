@@ -1,0 +1,86 @@
+# Copyright (C) 2019 Google Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Build targets needed to embedd perfetto.dev.
+
+load("@io_bazel_rules_go//proto:def.bzl", "go_proto_library")
+
+# Our build flags, this is referenced from perfetto_cfg.bzl.
+cc_library(
+    name = "build_config",
+    hdrs = ["perfetto_build_flags.h"],
+    includes = ["."],
+    visibility = ["//visibility:public"],
+)
+
+######## Perfetto Proto libraries ########
+
+go_proto_library(
+    name = "common_go_proto",
+    importpath = "protos/perfetto/common",
+    proto = "@perfetto//:protos_perfetto_common_protos",
+    visibility = ["//visibility:public"],
+)
+
+go_proto_library(
+    name = "config_go_proto",
+    importpath = "protos/perfetto/config",
+    protos = [
+        "@perfetto//:protos_perfetto_config_android_protos",
+        "@perfetto//:protos_perfetto_config_ftrace_protos",
+        "@perfetto//:protos_perfetto_config_gpu_protos",
+        "@perfetto//:protos_perfetto_config_inode_file_protos",
+        "@perfetto//:protos_perfetto_config_interceptors_protos",
+        "@perfetto//:protos_perfetto_config_power_protos",
+        "@perfetto//:protos_perfetto_config_process_stats_protos",
+        "@perfetto//:protos_perfetto_config_profiling_protos",
+        "@perfetto//:protos_perfetto_config_protos",
+        "@perfetto//:protos_perfetto_config_statsd_protos",
+        "@perfetto//:protos_perfetto_config_sys_stats_protos",
+        "@perfetto//:protos_perfetto_config_system_info_protos",
+        "@perfetto//:protos_perfetto_config_track_event_protos",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [":common_go_proto"],
+)
+
+go_proto_library(
+    name = "ipc_go_proto",
+    importpath = "protos/perfetto/ipc",
+    proto = "@perfetto//:protos_perfetto_ipc_protos",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":common_go_proto",
+        ":config_go_proto",
+    ],
+)
+
+go_proto_library(
+    name = "wire_go_proto",
+    importpath = "protos/perfetto/wire",
+    proto = "@perfetto//:protos_perfetto_ipc_wire_protocol_protos",
+    visibility = ["//visibility:public"],
+)
+
+java_proto_library(
+    name = "config_java_proto",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@perfetto//:protos_perfetto_common_protos",
+        "@perfetto//:protos_perfetto_config_ftrace_protos",
+        "@perfetto//:protos_perfetto_config_gpu_protos",
+        "@perfetto//:protos_perfetto_config_power_protos",
+        "@perfetto//:protos_perfetto_config_protos",
+    ],
+)

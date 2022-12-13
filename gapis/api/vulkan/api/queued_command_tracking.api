@@ -1,0 +1,336 @@
+// Copyright (C) 2018 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Based off of the original vulkan.h header file which has the following
+// license.
+
+// Copyright (c) 2015 The Khronos Group Inc.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and/or associated documentation files (the
+// "Materials"), to deal in the Materials without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Materials, and to
+// permit persons to whom the Materials are furnished to do so, subject to
+// the following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Materials.
+//
+// THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+// MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+
+@internal class queueMap {
+  dense_map!(u32, VkQueue) m
+}
+
+sub void executeSubmit(VkQueue queue, Submission sub) {
+  q := Queues[queue]
+  for i in (0 .. len(sub.WaitSemaphores)) {
+    sem := sub.WaitSemaphores[as!u32(i)]
+    s := Semaphores[sem]
+    s.Signaled = false
+  }
+  enterSubcontext()
+  for i in (0 .. len(sub.CommandBuffers)) {
+    LastDrawInfos[queue] = new!DrawInfo()
+    cb := CommandBuffers[sub.CommandBuffers[as!u32(i)]]
+    if ((cb.BeginInfo != null) &&
+        (cb.BeginInfo.DeviceGroupBegin != null)) {
+      q.DeviceMask = cb.BeginInfo.DeviceGroupBegin.DeviceMask
+    }
+    enterSubcontext()
+    for j in (0 .. len(cb.CommandReferences)) {
+      cmd := cb.CommandReferences[as!u32(j)]
+      onPreSubcommand(cmd)
+      callCommand(cmd)
+      onPostSubcommand(cmd)
+      nextSubcontext()
+    }
+    leaveSubcontext()
+    nextSubcontext()
+  }
+  leaveSubcontext()
+
+  if (sub.SparseBinds != null) {
+    for _ , buf , binds in sub.SparseBinds.BufferBinds {
+      if !(buf in Buffers) { vkErrorInvalidBuffer(buf) }
+      buffer := Buffers[buf]
+      blockSize := buffer.MemoryRequirements.alignment
+      for _ , _ , bind in binds.SparseMemoryBinds {
+        numBlocks := (bind.size + blockSize - 1) / blockSize
+        memOffset := bind.memoryOffset
+        resOffset := bind.resourceOffset
+        for j in (0 .. numBlocks) {
+          buffer.SparseMemoryBindings[as!u64(resOffset)] =
+          VkSparseMemoryBind(resOffset + (j * blockSize),
+            blockSize,       bind.memory,                 memOffset + (j * blockSize),
+            bind.flags)
+        }
+      }
+    }
+
+    for _ , img , binds in sub.SparseBinds.OpaqueImageBinds {
+      if (!img in Images) { vkErrorInvalidImage(img) }
+      image := Images[img]
+      // TODO: Handle multi-planar images
+      blockSize := getImagePlaneMemoryInfo(image, as!VkImageAspectFlagBits(0)).MemoryRequirements.alignment
+      for _ , _ , bind in binds.SparseMemoryBinds {
+        numBlocks := (bind.size + blockSize - 1) / blockSize
+        memOffset := bind.memoryOffset
+        resOffset := bind.resourceOffset
+        for j in (0 .. numBlocks) {
+          image.OpaqueSparseMemoryBindings[as!u64(resOffset)] =
+          VkSparseMemoryBind(resOffset + (j * blockSize),
+            blockSize,       bind.memory,                 memOffset + (j * blockSize),
+            bind.flags)
+        }
+      }
+      // Creates the shadow image data memory here if has not been done so.
+      // This is exactly the same to vkBindImageMemory except for linear
+      // and preinitialized images, we also create individual pool here.
+      // TODO: Redirect to bound memories for the data of linear preinitialized
+      // images.
+      for _, _, aspectBit in unpackImageAspectFlags(image, image.ImageAspect) {
+        aspect := image.Aspects[aspectBit]
+        for lay in (0 .. image.Info.ArrayLayers) {
+          for lev in (0 .. image.Info.MipLevels) {
+            level := aspect.Layers[lay].Levels[lev]
+            if len(level.Data) == 0 {
+              elementAndTexelBlockSize := getElementAndTexelBlockSize(image.Info.Format)
+              depthElementSize := getDepthElementSize(image.Info.Format, false)
+              // Roundup the width and height in the number of blocks.
+              widthInBlocks := roundUpTo(level.Width, elementAndTexelBlockSize.TexelBlockSize.Width)
+              heightInBlocks := roundUpTo(level.Height, elementAndTexelBlockSize.TexelBlockSize.Height)
+              elementSize := switch (aspectBit) {
+                case VK_IMAGE_ASPECT_COLOR_BIT:
+                  elementAndTexelBlockSize.ElementSize
+                case VK_IMAGE_ASPECT_DEPTH_BIT:
+                  depthElementSize
+                case VK_IMAGE_ASPECT_STENCIL_BIT:
+                  // stencil element is always 1 byte wide
+                  as!u32(1)
+              }
+              size := widthInBlocks * heightInBlocks * level.Depth * elementSize
+              level.Data = make!u8(size)
+            }
+          }
+        }
+      }
+    }
+
+    for _ , img , binds in sub.SparseBinds.ImageBinds {
+      if (!img in Images) { vkErrorInvalidImage(img) }
+      for _ , _ , bind in binds.SparseImageMemoryBinds {
+        addSparseImageMemoryBinding(img, bind)
+      }
+      image := Images[img]
+      // Creates the shadow image data memory here if has not been done so.
+      // This is exactly the same to vkBindImageMemory except for linear
+      // and preinitialized images, we also create individual pool here.
+      // TODO: Redirect to bound memories for the data of linear preinitialized
+      // images.
+      for _, _, aspectBit in unpackImageAspectFlags(image, image.ImageAspect) {
+        aspect := image.Aspects[aspectBit]
+        for lay in (0 .. image.Info.ArrayLayers) {
+          for lev in (0 .. image.Info.MipLevels) {
+            level := aspect.Layers[lay].Levels[lev]
+            if len(level.Data) == 0 {
+              elementAndTexelBlockSize := getElementAndTexelBlockSize(image.Info.Format)
+              depthElementSize := getDepthElementSize(image.Info.Format, false)
+              // Roundup the width and height in the number of blocks.
+              widthInBlocks := roundUpTo(level.Width, elementAndTexelBlockSize.TexelBlockSize.Width)
+              heightInBlocks := roundUpTo(level.Height, elementAndTexelBlockSize.TexelBlockSize.Height)
+              elementSize := switch (aspectBit) {
+                case VK_IMAGE_ASPECT_COLOR_BIT:
+                  elementAndTexelBlockSize.ElementSize
+                case VK_IMAGE_ASPECT_DEPTH_BIT:
+                  depthElementSize
+                case VK_IMAGE_ASPECT_STENCIL_BIT:
+                  // stencil element is always 1 byte wide
+                  as!u32(1)
+              }
+              size := widthInBlocks * heightInBlocks * level.Depth * elementSize
+              level.Data = make!u8(size)
+            }
+          }
+        }
+      }
+    }
+  } // Done sparse images
+
+  for i in (0 .. len(sub.WaitSemaphores)) {
+    sem := sub.WaitSemaphores[as!u32(i)]
+    s := Semaphores[sem]
+    s.Signaled = true
+  }
+}
+
+sub void callCommand(ref!CommandReference reference) {
+  switch reference.Type {
+    case cmd_vkCmdBindPipeline:
+      dovkCmdBindPipeline(CommandBuffers[reference.Buffer].BufferCommands.vkCmdBindPipeline[reference.MapIndex])
+    case cmd_vkCmdSetViewport:
+      dovkCmdSetViewport(CommandBuffers[reference.Buffer].BufferCommands.vkCmdSetViewport[reference.MapIndex])
+    case cmd_vkCmdSetScissor:
+      dovkCmdSetScissor(CommandBuffers[reference.Buffer].BufferCommands.vkCmdSetScissor[reference.MapIndex])
+    case cmd_vkCmdSetLineWidth:
+      dovkCmdSetLineWidth(CommandBuffers[reference.Buffer].BufferCommands.vkCmdSetLineWidth[reference.MapIndex])
+    case cmd_vkCmdSetDepthBias:
+      dovkCmdSetDepthBias(CommandBuffers[reference.Buffer].BufferCommands.vkCmdSetDepthBias[reference.MapIndex])
+    case cmd_vkCmdSetBlendConstants:
+      dovkCmdSetBlendConstants(CommandBuffers[reference.Buffer].BufferCommands.vkCmdSetBlendConstants[reference.MapIndex])
+    case cmd_vkCmdSetDepthBounds:
+      dovkCmdSetDepthBounds(CommandBuffers[reference.Buffer].BufferCommands.vkCmdSetDepthBounds[reference.MapIndex])
+    case cmd_vkCmdSetStencilCompareMask:
+      dovkCmdSetStencilCompareMask(CommandBuffers[reference.Buffer].BufferCommands.vkCmdSetStencilCompareMask[reference.MapIndex])
+    case cmd_vkCmdSetStencilWriteMask:
+      dovkCmdSetStencilWriteMask(CommandBuffers[reference.Buffer].BufferCommands.vkCmdSetStencilWriteMask[reference.MapIndex])
+    case cmd_vkCmdSetStencilReference:
+      dovkCmdSetStencilReference(CommandBuffers[reference.Buffer].BufferCommands.vkCmdSetStencilReference[reference.MapIndex])
+    case cmd_vkCmdBindDescriptorSets:
+      dovkCmdBindDescriptorSets(CommandBuffers[reference.Buffer].BufferCommands.vkCmdBindDescriptorSets[reference.MapIndex])
+    case cmd_vkCmdBindIndexBuffer:
+      dovkCmdBindIndexBuffer(CommandBuffers[reference.Buffer].BufferCommands.vkCmdBindIndexBuffer[reference.MapIndex])
+    case cmd_vkCmdBindVertexBuffers:
+      dovkCmdBindVertexBuffers(CommandBuffers[reference.Buffer].BufferCommands.vkCmdBindVertexBuffers[reference.MapIndex])
+    case cmd_vkCmdDraw:
+      dovkCmdDraw(CommandBuffers[reference.Buffer].BufferCommands.vkCmdDraw[reference.MapIndex])
+    case cmd_vkCmdDrawIndexed:
+      dovkCmdDrawIndexed(CommandBuffers[reference.Buffer].BufferCommands.vkCmdDrawIndexed[reference.MapIndex])
+    case cmd_vkCmdDrawIndirect:
+      dovkCmdDrawIndirect(CommandBuffers[reference.Buffer].BufferCommands.vkCmdDrawIndirect[reference.MapIndex])
+    case cmd_vkCmdDrawIndexedIndirect:
+      dovkCmdDrawIndexedIndirect(CommandBuffers[reference.Buffer].BufferCommands.vkCmdDrawIndexedIndirect[reference.MapIndex])
+    case cmd_vkCmdDispatch:
+      dovkCmdDispatch(CommandBuffers[reference.Buffer].BufferCommands.vkCmdDispatch[reference.MapIndex])
+    case cmd_vkCmdDispatchIndirect:
+      dovkCmdDispatchIndirect(CommandBuffers[reference.Buffer].BufferCommands.vkCmdDispatchIndirect[reference.MapIndex])
+    case cmd_vkCmdCopyBuffer:
+      dovkCmdCopyBuffer(CommandBuffers[reference.Buffer].BufferCommands.vkCmdCopyBuffer[reference.MapIndex])
+    case cmd_vkCmdCopyImage:
+      dovkCmdCopyImage(CommandBuffers[reference.Buffer].BufferCommands.vkCmdCopyImage[reference.MapIndex])
+    case cmd_vkCmdBlitImage:
+      dovkCmdBlitImage(CommandBuffers[reference.Buffer].BufferCommands.vkCmdBlitImage[reference.MapIndex])
+    case cmd_vkCmdCopyBufferToImage:
+      dovkCmdCopyBufferToImage(CommandBuffers[reference.Buffer].BufferCommands.vkCmdCopyBufferToImage[reference.MapIndex])
+    case cmd_vkCmdCopyImageToBuffer:
+      dovkCmdCopyImageToBuffer(CommandBuffers[reference.Buffer].BufferCommands.vkCmdCopyImageToBuffer[reference.MapIndex])
+    case cmd_vkCmdUpdateBuffer:
+      dovkCmdUpdateBuffer(CommandBuffers[reference.Buffer].BufferCommands.vkCmdUpdateBuffer[reference.MapIndex])
+    case cmd_vkCmdFillBuffer:
+      dovkCmdFillBuffer(CommandBuffers[reference.Buffer].BufferCommands.vkCmdFillBuffer[reference.MapIndex])
+    case cmd_vkCmdClearColorImage:
+      dovkCmdClearColorImage(CommandBuffers[reference.Buffer].BufferCommands.vkCmdClearColorImage[reference.MapIndex])
+    case cmd_vkCmdClearDepthStencilImage:
+      dovkCmdClearDepthStencilImage(CommandBuffers[reference.Buffer].BufferCommands.vkCmdClearDepthStencilImage[reference.MapIndex])
+    case cmd_vkCmdClearAttachments:
+      dovkCmdClearAttachments(CommandBuffers[reference.Buffer].BufferCommands.vkCmdClearAttachments[reference.MapIndex])
+    case cmd_vkCmdResolveImage:
+      dovkCmdResolveImage(CommandBuffers[reference.Buffer].BufferCommands.vkCmdResolveImage[reference.MapIndex])
+    case cmd_vkCmdSetEvent:
+      dovkCmdSetEvent(CommandBuffers[reference.Buffer].BufferCommands.vkCmdSetEvent[reference.MapIndex])
+    case cmd_vkCmdResetEvent:
+      dovkCmdResetEvent(CommandBuffers[reference.Buffer].BufferCommands.vkCmdResetEvent[reference.MapIndex])
+    case cmd_vkCmdWaitEvents:
+      dovkCmdWaitEvents(CommandBuffers[reference.Buffer].BufferCommands.vkCmdWaitEvents[reference.MapIndex])
+    case cmd_vkCmdPipelineBarrier:
+      dovkCmdPipelineBarrier(CommandBuffers[reference.Buffer].BufferCommands.vkCmdPipelineBarrier[reference.MapIndex])
+    case cmd_vkCmdBeginQuery:
+      dovkCmdBeginQuery(CommandBuffers[reference.Buffer].BufferCommands.vkCmdBeginQuery[reference.MapIndex])
+    case cmd_vkCmdEndQuery:
+      dovkCmdEndQuery(CommandBuffers[reference.Buffer].BufferCommands.vkCmdEndQuery[reference.MapIndex])
+    case cmd_vkCmdResetQueryPool:
+      dovkCmdResetQueryPool(CommandBuffers[reference.Buffer].BufferCommands.vkCmdResetQueryPool[reference.MapIndex])
+    case cmd_vkCmdWriteTimestamp:
+      dovkCmdWriteTimestamp(CommandBuffers[reference.Buffer].BufferCommands.vkCmdWriteTimestamp[reference.MapIndex])
+    case cmd_vkCmdCopyQueryPoolResults:
+      dovkCmdCopyQueryPoolResults(CommandBuffers[reference.Buffer].BufferCommands.vkCmdCopyQueryPoolResults[reference.MapIndex])
+    case cmd_vkCmdPushConstants:
+      dovkCmdPushConstants(CommandBuffers[reference.Buffer].BufferCommands.vkCmdPushConstants[reference.MapIndex])
+    case cmd_vkCmdBeginRenderPass:
+      dovkCmdBeginRenderPassX(CommandBuffers[reference.Buffer].BufferCommands.vkCmdBeginRenderPass[reference.MapIndex])
+    case cmd_vkCmdNextSubpass:
+      dovkCmdNextSubpassX(CommandBuffers[reference.Buffer].BufferCommands.vkCmdNextSubpass[reference.MapIndex])
+    case cmd_vkCmdEndRenderPass:
+      dovkCmdEndRenderPassX(CommandBuffers[reference.Buffer].BufferCommands.vkCmdEndRenderPass[reference.MapIndex])
+    case cmd_vkCmdExecuteCommands:
+      dovkCmdExecuteCommands(CommandBuffers[reference.Buffer].BufferCommands.vkCmdExecuteCommands[reference.MapIndex])
+    case cmd_vkCmdDebugMarkerBeginEXT:
+      dovkCmdDebugMarkerBeginEXT(CommandBuffers[reference.Buffer].BufferCommands.vkCmdDebugMarkerBeginEXT[reference.MapIndex])
+    case cmd_vkCmdDebugMarkerEndEXT:
+      dovkCmdDebugMarkerEndEXT(CommandBuffers[reference.Buffer].BufferCommands.vkCmdDebugMarkerEndEXT[reference.MapIndex])
+    case cmd_vkCmdDebugMarkerInsertEXT:
+      dovkCmdDebugMarkerInsertEXT(CommandBuffers[reference.Buffer].BufferCommands.vkCmdDebugMarkerInsertEXT[reference.MapIndex])
+    case cmd_vkCmdDrawIndirectCountKHR:
+      dovkCmdDrawIndirectCountKHR(CommandBuffers[reference.Buffer].BufferCommands.vkCmdDrawIndirectCountKHR[reference.MapIndex])
+    case cmd_vkCmdDrawIndexedIndirectCountKHR:
+      dovkCmdDrawIndexedIndirectCountKHR(CommandBuffers[reference.Buffer].BufferCommands.vkCmdDrawIndexedIndirectCountKHR[reference.MapIndex])
+    case cmd_vkCmdDrawIndirectCountAMD:
+      dovkCmdDrawIndirectCountAMD(CommandBuffers[reference.Buffer].BufferCommands.vkCmdDrawIndirectCountAMD[reference.MapIndex])
+    case cmd_vkCmdDrawIndexedIndirectCountAMD:
+      dovkCmdDrawIndexedIndirectCountAMD(CommandBuffers[reference.Buffer].BufferCommands.vkCmdDrawIndexedIndirectCountAMD[reference.MapIndex])
+    case cmd_vkCmdBeginDebugUtilsLabelEXT:
+      dovkCmdBeginDebugUtilsLabelEXT(CommandBuffers[reference.Buffer].BufferCommands.vkCmdBeginDebugUtilsLabelEXT[reference.MapIndex])
+    case cmd_vkCmdEndDebugUtilsLabelEXT:
+      dovkCmdEndDebugUtilsLabelEXT(CommandBuffers[reference.Buffer].BufferCommands.vkCmdEndDebugUtilsLabelEXT[reference.MapIndex])
+    case cmd_vkCmdInsertDebugUtilsLabelEXT:
+      dovkCmdInsertDebugUtilsLabelEXT(CommandBuffers[reference.Buffer].BufferCommands.vkCmdInsertDebugUtilsLabelEXT[reference.MapIndex])
+    case cmd_vkCmdSetDeviceMaskKHR:
+      dovkCmdSetDeviceMaskKHR(CommandBuffers[reference.Buffer].BufferCommands.vkCmdSetDeviceMaskKHR[reference.MapIndex])
+    case cmd_vkCmdSetDeviceMask:
+      dovkCmdSetDeviceMask(CommandBuffers[reference.Buffer].BufferCommands.vkCmdSetDeviceMask[reference.MapIndex])
+    case cmd_vkCmdDispatchBaseKHR:
+      dovkCmdDispatchBaseKHR(CommandBuffers[reference.Buffer].BufferCommands.vkCmdDispatchBaseKHR[reference.MapIndex])
+    case cmd_vkCmdDispatchBase:
+      dovkCmdDispatchBase(CommandBuffers[reference.Buffer].BufferCommands.vkCmdDispatchBase[reference.MapIndex])
+    case cmd_vkCmdSetLineStippleEXT:
+      dovkCmdSetLineStippleEXT(CommandBuffers[reference.Buffer].BufferCommands.vkCmdSetLineStippleEXT[reference.MapIndex])
+    // Vulkan 1.2
+    case cmd_vkCmdBeginRenderPass2:
+      dovkCmdBeginRenderPassX(CommandBuffers[reference.Buffer].BufferCommands.vkCmdBeginRenderPass2[reference.MapIndex])
+    case cmd_vkCmdEndRenderPass2:
+      dovkCmdEndRenderPassX(CommandBuffers[reference.Buffer].BufferCommands.vkCmdEndRenderPass2[reference.MapIndex])
+    case cmd_vkCmdNextSubpass2:
+      dovkCmdNextSubpassX(CommandBuffers[reference.Buffer].BufferCommands.vkCmdNextSubpass2[reference.MapIndex])
+    // @extension("VK_EXT_transform_feedback")
+    case cmd_vkCmdBindTransformFeedbackBuffersEXT:
+      dovkCmdBindTransformFeedbackBuffersEXT(CommandBuffers[reference.Buffer].BufferCommands.vkCmdBindTransformFeedbackBuffersEXT[reference.MapIndex])
+    case cmd_vkCmdBeginTransformFeedbackEXT:
+      dovkCmdBeginTransformFeedbackEXT(CommandBuffers[reference.Buffer].BufferCommands.vkCmdBeginTransformFeedbackEXT[reference.MapIndex])
+    case cmd_vkCmdEndTransformFeedbackEXT:
+      dovkCmdEndTransformFeedbackEXT(CommandBuffers[reference.Buffer].BufferCommands.vkCmdEndTransformFeedbackEXT[reference.MapIndex])
+    case cmd_vkCmdBeginQueryIndexedEXT:
+      dovkCmdBeginQueryIndexedEXT(CommandBuffers[reference.Buffer].BufferCommands.vkCmdBeginQueryIndexedEXT[reference.MapIndex])
+    case cmd_vkCmdEndQueryIndexedEXT:
+      dovkCmdEndQueryIndexedEXT(CommandBuffers[reference.Buffer].BufferCommands.vkCmdEndQueryIndexedEXT[reference.MapIndex])
+    case cmd_vkCmdDrawIndirectByteCountEXT:
+      dovkCmdDrawIndirectByteCountEXT(CommandBuffers[reference.Buffer].BufferCommands.vkCmdDrawIndirectByteCountEXT[reference.MapIndex])
+    // @extension("VK_KHR_create_renderpass2")
+    case cmd_vkCmdBeginRenderPass2KHR:
+      dovkCmdBeginRenderPassX(CommandBuffers[reference.Buffer].BufferCommands.vkCmdBeginRenderPass2KHR[reference.MapIndex])
+    case cmd_vkCmdEndRenderPass2KHR:
+      dovkCmdEndRenderPassX(CommandBuffers[reference.Buffer].BufferCommands.vkCmdEndRenderPass2KHR[reference.MapIndex])
+    case cmd_vkCmdNextSubpass2KHR:
+      dovkCmdNextSubpassX(CommandBuffers[reference.Buffer].BufferCommands.vkCmdNextSubpass2KHR[reference.MapIndex])
+    default:
+      vkErrorInvalidCommandBuffer(reference.Buffer)
+  }
+}
+

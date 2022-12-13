@@ -1,0 +1,210 @@
+# Copyright (C) 2018 Google Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+load("@io_bazel_rules_go//proto:def.bzl", "go_proto_library")
+load("@rules_proto//proto:defs.bzl", "proto_library")
+load("//tools/build:rules.bzl", "api_library", "apic_template")
+
+filegroup(
+    name = "api_files",
+    srcs = glob([
+        "*.api",
+        "api/*.api",
+        "extensions/*.api",
+        "linux/*.api",
+        "windows/*.api",
+        "mac/*.api",
+        "android/*.api",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+api_library(
+    name = "api",
+    api = "vulkan.api",
+    apiname = "vulkan",
+    includes = [":api_files"],
+    visibility = ["//visibility:public"],
+    deps = ["//gapis/messages:api"],
+)
+
+apic_template(
+    name = "generated",
+    api = ":api",
+    templates = [
+        "//gapis/api/templates:api",
+        "//gapis/api/templates:api_types",
+        "//gapis/api/templates:mutate",
+        "//gapis/api/templates:constant_sets",
+        "//gapis/api/templates:convert",
+        "//gapis/api/templates:state_serialize",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+go_library(
+    name = "go_default_library",
+    srcs = [
+        "allocation_tracker.go",
+        "buffer_command.go",
+        "command_buffer_rebuilder.go",
+        "command_builder_utils.go",
+        "custom_replay.go",
+        "doc.go",
+        "draw_call_mesh.go",
+        "draw_call_pipeline.go",
+        "externs.go",
+        "extras.go",
+        "framegraph.go",
+        "graph_visualization.go",
+        "image_primer.go",
+        "image_primer_device_copy.go",
+        "image_primer_host_copy.go",
+        "image_primer_render.go",
+        "image_primer_resources.go",
+        "image_primer_shaders.go",
+        "image_primer_store.go",
+        "insertion_command.go",
+        "labels.go",
+        "links.go",
+        "looping_vulkan_control_flow_generator.go",
+        "mem_binding_list.go",
+        "memory_breakdown.go",
+        "primeable_image_data.go",
+        "profile_static_analysis.go",
+        "queue_task.go",
+        "replay.go",
+        "replay_types.go",
+        "resources.go",
+        "scratch_resources.go",
+        "state.go",
+        "state_rebuilder.go",
+        "transform_af_disabler.go",
+        "transform_capture_log.go",
+        "transform_command_disabler.go",
+        "transform_command_splitter.go",
+        "transform_destroy_resources_eos.go",
+        "transform_display_to_surface.go",
+        "transform_drop_invalid_destroy.go",
+        "transform_end_of_replay.go",
+        "transform_external_memory.go",
+        "transform_file_log.go",
+        "transform_find_issues.go",
+        "transform_make_attachment_readable.go",
+        "transform_mapping_exporter.go",
+        "transform_overdraw.go",
+        "transform_profiling_layers.go",
+        "transform_query_timestamps.go",
+        "transform_read_framebuffer.go",
+        "transform_vulkan_terminator.go",
+        "transform_wireframe.go",
+        "vulkan.go",
+        "wait_for_perfetto.go",
+        ":generated",  # keep
+    ],
+    embed = [
+        ":vulkan_go_proto",
+    ],
+    importpath = "github.com/google/gapid/gapis/api/vulkan",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//core/app/status:go_default_library",
+        "//core/context/keys:go_default_library",
+        "//core/data:go_default_library",  # keep
+        "//core/data/binary:go_default_library",
+        "//core/data/dictionary:go_default_library",
+        "//core/data/endian:go_default_library",
+        "//core/data/id:go_default_library",
+        #TODO: remove protoconv when it's supplied by deps
+        "//core/data/protoconv:go_default_library",  # keep
+        "//core/event/task:go_default_library",  # keep
+        "//core/image:go_default_library",
+        "//core/image/astc:go_default_library",
+        "//core/image/etc:go_default_library",
+        "//core/log:go_default_library",
+        "//core/math/interval:go_default_library",
+        "//core/math/u64:go_default_library",  # keep
+        "//core/os/device:go_default_library",
+        "//core/stream:go_default_library",
+        "//core/stream/fmts:go_default_library",
+        "//core/vulkan/loader:go_default_library",
+        "//gapil/constset:go_default_library",  # keep
+        "//gapir:go_default_library",
+        "//gapis/api:go_default_library",
+        "//gapis/api/commandGenerator:go_default_library",
+        "//gapis/api/controlFlowGenerator:go_default_library",
+        "//gapis/api/sync:go_default_library",
+        "//gapis/api/terminator:go_default_library",
+        "//gapis/api/transform:go_default_library",
+        "//gapis/api/vulkan/vulkan_pb:go_default_library",  # keep
+        "//gapis/capture:go_default_library",
+        "//gapis/config:go_default_library",
+        "//gapis/database:go_default_library",
+        "//gapis/memory:go_default_library",
+        "//gapis/memory/memory_pb:go_default_library",  # keep
+        "//gapis/messages:go_default_library",
+        "//gapis/replay:go_default_library",
+        "//gapis/replay/builder:go_default_library",
+        "//gapis/replay/protocol:go_default_library",
+        "//gapis/replay/value:go_default_library",
+        "//gapis/resolve:go_default_library",
+        "//gapis/resolve/dependencygraph2:go_default_library",
+        "//gapis/resolve/initialcmds:go_default_library",
+        "//gapis/service:go_default_library",
+        "//gapis/service/memory_box:go_default_library",  #keep
+        "//gapis/service/path:go_default_library",
+        "//gapis/service/types:go_default_library",  #keep
+        "//gapis/shadertools:go_default_library",
+        "//gapis/stringtable:go_default_library",  # keep
+        "//gapis/trace:go_default_library",
+        "//gapis/vertex:go_default_library",
+        "@com_github_golang_protobuf//proto:go_default_library",
+    ],
+)
+
+proto_library(
+    name = "vulkan_proto",
+    srcs = [
+        "replay.proto",
+        "resolvables.proto",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+go_proto_library(
+    name = "vulkan_go_proto",
+    importpath = "github.com/google/gapid/gapis/api/vulkan",
+    proto = ":vulkan_proto",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "go_default_test",
+    srcs = [
+        "externs_test.go",
+        "graph_visualization_test.go",
+        "image_primer_shaders_test.go",
+        "image_primer_test.go",
+    ],
+    embed = [":go_default_library"],
+    deps = [
+        "//core/assert:go_default_library",
+        "//core/image:go_default_library",
+        "//core/log:go_default_library",
+        "//core/os/device:go_default_library",
+        "//gapis/api:go_default_library",
+        "//gapis/memory:go_default_library",
+    ],
+)

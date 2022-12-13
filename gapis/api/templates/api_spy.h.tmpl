@@ -1,0 +1,181 @@
+{{/*
+ * Copyright (C) 2017 Google Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */}}
+
+{{/* ---- Includes ---- */}}
+{{Include "api_classnames.tmpl"}}
+{{Include "cpp_common.tmpl"    }}
+
+{{/* ---- Overrides ---- */}}
+{{Global "C++.ArenaOverride" "arena()"}}
+
+{{$filename := print (Global "API") "_spy.h" }}
+{{Global "SpyName" (print (Title (Global "API")) "Spy")}}
+{{$ | Macro "Spy" | Reflow 4 | Write $filename}}
+
+{{define "Spy"}}
+  {{AssertType $ "API"}}
+  {{Template "C++.Copyright"}}
+  {{$spyname := Global "SpyName"}}
+  {{$statename := print (Title (Global "API")) "State"}}
+  {{$guard := print "GAPII_" (Upper (Global "API")) "_SPY_H"}}
+¶
+  #ifndef {{$guard}}
+  #define {{$guard}}
+¶
+  #include "{{Global "API"}}_imports.h"
+  #include "{{Global "API"}}_types.h"
+¶
+  #include "gapii/cc/spy_base.h"
+  #include "gapii/cc/call_observer.h"
+  #include "gapii/cc/state_serializer.h"
+¶
+  #define __STDC_FORMAT_MACROS
+  #include <inttypes.h>
+  #include <memory>
+  #include <unordered_set>
+¶
+namespace {{(Global "API")}} {
+  class State;
+}
+¶
+  namespace gapii {«
+¶
+  class {{$spyname}} : public virtual SpyBase {
+  «public:»
+    {{$imports := Macro "ApiClassnames.Imports"}}
+    inline {{$spyname}}();
+    inline void init();
+¶
+    inline const {{$imports}}& imports() const;
+¶
+    {{ForEach ($.Externs) "DeclareExtern" | JoinWith "\n"}}
+
+    {{ForEach ($.Subroutines) "DeclareSubroutine" | JoinWith "\n"}}
+¶
+    {{ForEach (AllCommands $) "DeclareCommand" | JoinWith "\n"}}
+¶
+    const static uint32_t kApiIndex = {{$.Index}};
+¶
+    {{$statename}} mState;
+¶
+    #include "gapii/cc/{{Global "API"}}_extras.inc"
+¶
+  «protected:»
+¶
+    bool observeFramebuffer(CallObserver* observer, uint32_t* w, uint32_t* h, std::vector<uint8_t>* data);
+¶
+    {{$imports}} mImports;
+  };
+¶
+  // Inline methods
+  inline {{$spyname}}::{{$spyname}}() : mState(arena()) {}
+¶
+  inline void {{$spyname}}::init() {
+    mImports.resolve();
+    {{range $g := $.Globals}}
+      mState.{{$g.Name}} = §
+        {{if $g.Default}}
+          {{Macro "C++.Read" $g.Default}};
+        {{else}}
+          {{Macro "C++.Null" (TypeOf $g)}};
+        {{end}}
+    {{end}}
+  }
+¶
+  inline const {{$imports}}& {{$spyname}}::imports() const {
+    return mImports;
+  }
+¶
+  #include "gapii/cc/{{Global "API"}}_inlines.inc"
+¶
+  »} // namespace gapii
+¶
+  #endif // {{$guard}}
+¶
+{{end}}
+
+{{/*
+-------------------------------------------------------------------------------
+Returns "typename Parameter" if the parameter had an any type,
+otherwise returns nothing.
+-------------------------------------------------------------------------------
+*/}}
+{{define "TemplateParam"}}
+  {{AssertType $ "Parameter"}}
+  {{if IsAny (TypeOf $)}}typename {{Title $.Named}}{{end}}
+{{end}}
+
+{{/*
+-------------------------------------------------------------------------------
+  Returns the template list if any of the parameters have AnyType
+-------------------------------------------------------------------------------
+*/}}
+{{define "AnyParams"}}
+  {{ForEach ($.CallParameters) "TemplateParam" | JoinWith ", "}}
+{{end}}
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits a C++ template values for the given type.
+-------------------------------------------------------------------------------
+*/}}
+{{define "TemplateArgs"}}
+  {{$a := (Macro "AnyParams" $)}}
+  {{if $a}}
+  template<{{$a}}>
+  {{end}}
+{{end}}
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits a single C++ method declaration for the given extern.
+-------------------------------------------------------------------------------
+*/}}
+{{define "DeclareExtern"}}
+  {{AssertType $ "Function"}}
+
+  {{$args := Strings "CallObserver* observer" (Macro "C++.CallParameters" $) | JoinWith ", "}}
+  {{Template "TemplateArgs" $}}
+  {{Template "C++.ReturnType" $}} {{Template "C++.MethodName" $}}({{$args}});
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits a single C++ method declaration for the given subroutine.
+-------------------------------------------------------------------------------
+*/}}
+{{define "DeclareSubroutine"}}
+  {{AssertType $ "Function"}}
+
+  {{Template "TemplateArgs" $}}
+  {{$args := Strings "CallObserver* observer" "const std::function<void()>& call" (Macro "C++.CallParameters" $) | JoinWith ", "}}
+  {{Template "C++.SubReturnType" $}} {{Template "C++.MethodName" $}}({{$args}});
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits a single C++ method declaration for the given command.
+-------------------------------------------------------------------------------
+*/}}
+{{define "DeclareCommand"}}
+  {{AssertType $ "Function"}}
+  {{if not (GetAnnotation $ "pfn")}}
+    {{Template "TemplateArgs" $}}
+    {{Template "C++.ReturnType" $}} {{Template "C++.MethodName" $}}({{Macro "C++.CallParameters" $ | Strings "CallObserver* observer" | JoinWith ", "}});
+  {{end}}
+{{end}}

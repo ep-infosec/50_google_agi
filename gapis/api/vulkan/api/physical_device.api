@@ -1,0 +1,169 @@
+// Copyright (C) 2018 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Based off of the original vulkan.h header file which has the following
+// license.
+
+// Copyright (c) 2015 The Khronos Group Inc.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and/or associated documentation files (the
+// "Materials"), to deal in the Materials without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Materials, and to
+// permit persons to whom the Materials are furnished to do so, subject to
+// the following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Materials.
+//
+// THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+// MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+
+@internal class PhysicalDeviceObject {
+  @unused VkInstance               Instance
+  @unused u32                      Index
+  VkPhysicalDeviceMemoryProperties MemoryProperties
+  @unused VkPhysicalDevice         VulkanHandle
+  // A map of queue family indices to queue properties.
+  @unused map!(u32, VkQueueFamilyProperties) QueueFamilyProperties
+  @unused ref!VulkanDebugMarkerInfo          DebugInfo
+  @unused VkPhysicalDeviceProperties         PhysicalDeviceProperties
+  @hidden @unused map!(VkFormat, VkFormatProperties) FormatProperties
+
+  // Vulkan 1.1 core
+  @unused ref!PointClippingProperties                 PointClippingProperties
+  @unused ref!Maintenance3Properties                  Maintenance3Properties
+  @unused ref!SubgroupProperties                      SubgroupProperties
+  @unused ref!PhysicalDeviceIDProperties              IDProperties
+  @unused ref!PhysicalDeviceMultiviewProperties       MultiviewProperties
+  @unused ref!PhysicalDeviceProtectedMemoryProperties ProtectedMemoryProperties
+
+  // Vulkan 1.2 core
+  @unused ref!PhysicalDeviceSamplerFilterMinmaxProperties PhysicalDeviceSamplerFilterMinmaxProperties
+  @unused ref!PhysicalDeviceDepthStencilResolveProperties PhysicalDeviceDepthStencilResolveProperties
+  @unused ref!PhysicalDeviceDescriptorIndexingProperties PhysicalDeviceDescriptorIndexingProperties
+
+  // Extensions
+  @unused ref!PhysicalDevicePCIBusInfoPropertiesEXT PhysicalDevicePCIBusInfoPropertiesEXT
+  @unused ref!PhysicalDeviceShaderCorePropertiesAMD PhysicalDeviceShaderCorePropertiesAMD
+  @unused ref!PhysicalDeviceFloatControlsPropertiesKHR PhysicalDeviceFloatControlsPropertiesKHR
+  @unused ref!PhysicalDeviceDriverPropertiesKHR PhysicalDeviceDriverPropertiesKHR
+  @unused ref!PhysicalDeviceLineRasterizationPropertiesEXT PhysicalDeviceLineRasterizationPropertiesEXT
+  @unused ref!PhysicalDeviceVertexAttributeDivisorPropertiesEXT PhysicalDeviceVertexAttributeDivisorPropertiesEXT
+  @unused ref!PhysicalDeviceProvokingVertexPropertiesEXT PhysicalDeviceProvokingVertexPropertiesEXT
+  @unused ref!PhysicalDeviceTransformFeedbackPropertiesEXT PhysicalDeviceTransformFeedbackPropertiesEXT
+  @unused ref!PhysicalDeviceBlendOperationAdvancedPropertiesEXT PhysicalDeviceBlendOperationAdvancedPropertiesEXT
+  @unused ref!PhysicalDeviceCustomBorderColorPropertiesEXT PhysicalDeviceCustomBorderColorPropertiesEXT
+}
+
+@internal @serialize class PhysicalDevicesAndProperties {
+  map!(VkPhysicalDevice, VkPhysicalDeviceProperties) PhyDevToProperties
+}
+
+@internal @serialize class PhysicalDevicesMemoryProperties {
+  map!(VkPhysicalDevice, VkPhysicalDeviceMemoryProperties) PhyDevToMemoryProperties
+}
+
+@internal @serialize class PhysicalDevicesAndQueueFamilyProperties {
+  map!(VkPhysicalDevice, map!(u32, VkQueueFamilyProperties)) PhyDevToQueueFamilyProperties
+}
+
+@internal @serialize class PhysicalDevicesFormatProperties {
+  map!(VkPhysicalDevice, map!(VkFormat, VkFormatProperties)) PhyDevToFormatProperties
+}
+
+@indirect("VkInstance")
+cmd VkResult vkEnumeratePhysicalDevices(
+    VkInstance        instance,
+    u32*              pPhysicalDeviceCount,
+    VkPhysicalDevice* pPhysicalDevices) {
+  if !(instance in Instances) { vkErrorInvalidInstance(instance) }
+  if pPhysicalDeviceCount == null { vkErrorNullPointer("uint32_t") }
+  _ = pPhysicalDeviceCount[0]
+
+  fence
+  if pPhysicalDevices == null {
+    pPhysicalDeviceCount[0] = ?
+  } else {
+    count := as!u32(?)
+    devices := pPhysicalDevices[0:count]
+    for i in (0 .. count) {
+      device := ?
+      devices[i] = device
+    }
+    pPhysicalDeviceCount[0] = count
+    props := fetchPhysicalDeviceProperties(instance, devices)
+    memProps := fetchPhysicalDeviceMemoryProperties(instance, devices)
+    queueProps := fetchPhysicalDeviceQueueFamilyProperties(instance, devices)
+    formatProps := fetchPhysicalDeviceFormatProperties(instance, devices)
+    for i in (0 .. count) {
+      if (PhysicalDevices[devices[i]] == null) {
+        object := new!PhysicalDeviceObject()
+        object.Instance = instance
+        object.Index = i
+        if memProps != null {
+          object.MemoryProperties = memProps.PhyDevToMemoryProperties[devices[i]]
+        }
+        object.VulkanHandle = devices[i]
+        if props != null {
+          // TODO: Failed to prefetch physical device properties, report issue.
+          object.PhysicalDeviceProperties = props.PhyDevToProperties[devices[i]]
+        }
+        if queueProps != null {
+          object.QueueFamilyProperties = queueProps.PhyDevToQueueFamilyProperties[devices[i]]
+        }
+        if formatProps != null {
+                object.FormatProperties = formatProps.PhyDevToFormatProperties[devices[i]]
+        }
+        PhysicalDevices[devices[i]] = object
+      }
+    }
+  }
+
+  return ?
+}
+
+@internal class PointClippingProperties {
+  VkPointClippingBehavior PointClippingBehavior
+}
+
+@internal class Maintenance3Properties {
+  u32          MaxPerSetDescriptors
+  VkDeviceSize MaxMemoryAllocationSize
+}
+
+@internal class SubgroupProperties {
+  u32                    SubgroupSize
+  VkShaderStageFlags     SupportedStages
+  VkSubgroupFeatureFlags SupportedOperations
+  VkBool32               QuadOperationsInAllStages
+}
+
+@internal class PhysicalDeviceIDProperties {
+  u8[VK_UUID_SIZE] DeviceUUID
+  u8[VK_UUID_SIZE] DriverUUID
+  u8[VK_LUID_SIZE] DeviceLUID
+  u32              DeviceNodeMask
+  VkBool32         DeviceLUIDValid
+}
+
+@internal class PhysicalDeviceProtectedMemoryProperties {
+  VkBool32 ProtectedNoFault
+}

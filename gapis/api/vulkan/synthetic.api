@@ -1,0 +1,273 @@
+// Copyright (C) 2017 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+@synthetic
+cmd VkResult replayCreateVkInstance(
+    const VkInstanceCreateInfo*  pCreateInfo,
+    AllocationCallbacks          pAllocator,
+    VkInstance*                  pInstance) {
+  // NOTE: The logic for this function should be identical to the one of
+  // vkCreateInstance() in vulkan.api. Change both together.
+
+  instance := createInstanceObject(pCreateInfo)
+
+  handle := ?
+  if pInstance == null {vkErrorNullPointer("VkInstance")}
+  pInstance[0] = handle
+  instance.VulkanHandle = handle
+  Instances[handle] = instance
+  return ?
+}
+
+@synthetic
+cmd void replayDestroyVkInstance(
+    VkInstance                   instance,
+    AllocationCallbacks          pAllocator) {
+  // NOTE: The logic for this function should be identical to the one of
+  // vkDestroyInstance() in vulkan.api. Change both together
+  delete(Instances, instance)
+  for _, device, _ in PhysicalDevices {
+    if (PhysicalDevices[device].Instance == instance) {
+      delete(PhysicalDevices, device)
+    }
+  }
+}
+
+@synthetic
+cmd VkResult ReplayCreateVkDevice(
+    VkPhysicalDevice             physicalDevice,
+    const VkDeviceCreateInfo*    pCreateInfo,
+    AllocationCallbacks          pAllocator,
+    VkDevice*                    pDevice) {
+  // NOTE: The logic for this function should be identical to the one of
+  // vkCreateDevice() in vulkan.api. Change both together.
+
+  device := createDeviceObject(pCreateInfo)
+  device.PhysicalDevice = physicalDevice
+
+  handle := ?
+  if pDevice == null {vkErrorNullPointer("VkDevice")}
+  pDevice[0] = handle
+  device.VulkanHandle = handle
+  Devices[handle] = device
+
+  return ?
+}
+
+@synthetic
+cmd void replayRegisterVkInstance(VkInstance instance) { }
+
+@synthetic
+cmd void replayUnregisterVkInstance(VkInstance instance) { }
+
+@synthetic
+cmd void replayRegisterVkDevice(
+    VkPhysicalDevice    physicalDevice
+    VkDevice            device
+    VkDeviceCreateInfo* createInfo
+) {
+  info := createInfo[0]
+  // We only care about the queue create specifications.
+  _ = info.pQueueCreateInfos[0:info.queueCreateInfoCount]
+}
+
+@synthetic
+cmd void replayUnregisterVkDevice(VkDevice device) { }
+
+@synthetic
+cmd void replayRegisterVkCommandBuffers(
+    VkDevice         device,
+    u32              count,
+    VkCommandBuffer* commandBuffers) {
+  _ = commandBuffers[0:count]
+}
+
+@synthetic
+cmd void replayUnregisterVkCommandBuffers(
+    u32              count,
+    VkCommandBuffer* commandBuffers) {
+  _ = commandBuffers[0:count]
+}
+
+@synthetic
+cmd void toggleVirtualSwapchainReturnAcquiredImage(
+    VkSwapchainKHR* pSwapchain) {
+  _ = pSwapchain[0]
+}
+
+@synthetic
+cmd VkResult replayGetFenceStatus(
+    VkDevice device,
+    VkFence  fence,
+    VkResult expected) {
+  return ?
+}
+
+@synthetic
+cmd VkResult replayGetEventStatus(
+    VkDevice device,
+    VkEvent  event,
+    VkResult expected,
+    bool     wait) {
+  return ?
+}
+
+@synthetic
+@custom
+cmd VkResult replayAllocateImageMemory(VkDevice device, VkPhysicalDeviceMemoryProperties* pPhysicalDeviceMemoryProperties, VkImage image, VkDeviceMemory* pMemory) {
+  _ = pPhysicalDeviceMemoryProperties[0]
+  handle := ?
+  pMemory[0] = handle
+  return ?
+}
+
+@synthetic
+cmd VkResult replayEnumeratePhysicalDevices(
+    VkInstance instance,
+    u32*              pPhysicalDeviceCount,
+    VkPhysicalDevice* pPhysicalDevices,
+    // This is an array of expected vendorID/deviceID (32-bits/32-bits)
+    u64*              pPhysicalDeviceIDs) {
+  count := pPhysicalDeviceCount[0]
+  read(pPhysicalDeviceIDs[0:count])
+  fence
+  devices := pPhysicalDevices[0:count]
+  for i in (0 .. count) {
+    device := ?
+    devices[i] = device
+  }
+  props := fetchPhysicalDeviceProperties(instance, devices)
+  memProps := fetchPhysicalDeviceMemoryProperties(instance, devices)
+  formatProps := fetchPhysicalDeviceFormatProperties(instance, devices)
+  for i in (0 .. count) {
+    object := switch (PhysicalDevices[devices[i]] == null) {
+      case true:
+        new!PhysicalDeviceObject()
+      case false:
+        PhysicalDevices[devices[i]]
+    }
+    object.Instance = instance
+    object.Index = i
+    object.VulkanHandle = devices[i]
+    if memProps != null {
+      object.MemoryProperties = memProps.PhyDevToMemoryProperties[devices[i]]
+    }
+    if props != null {
+      object.PhysicalDeviceProperties = props.PhyDevToProperties[devices[i]]
+    }
+    if formatProps != null {
+      object.FormatProperties = formatProps.PhyDevToFormatProperties[devices[i]]
+    }
+    PhysicalDevices[devices[i]] = object
+  }
+  return ?
+}
+
+@synthetic
+cmd VkResult ReplayCreateSwapchain(
+    VkDevice                        device,
+    const VkSwapchainCreateInfoKHR* pCreateInfo,
+    AllocationCallbacks             pAllocator,
+    VkSwapchainKHR*                 pSwapchain) {
+  if !(device in Devices) { vkErrorInvalidDevice(device) }
+  if pCreateInfo == null { vkErrorNullPointer("VkSwapchainCreateInfoKHR") }
+  // Handle pNext
+  createInfo := pCreateInfo[0]
+  if createInfo.pNext != null {
+    numPNext := numberOfPNext(createInfo.pNext)
+    next := MutableVoidPtr(as!void*(createInfo.pNext))
+    for i in (0 .. numPNext) {
+      sType := as!const VkStructureType*(next.Ptr)[0]
+      switch sType {
+        case VK_STRUCTURE_TYPE_VIRTUAL_SWAPCHAIN_PNEXT: {
+          ext := as!VirtualSwapchainPNext*(next.Ptr)[0]
+          if ext.surfaceCreateInfo != null {
+            _ = as!VkStructureType*(ext.surfaceCreateInfo)[0]
+          }
+        }
+      }
+      next.Ptr = as!VulkanStructHeader*(next.Ptr)[0].PNext
+    }
+  }
+  create_info := pCreateInfo[0]
+  queueFamilyIndices := create_info.pQueueFamilyIndices[0:create_info.queueFamilyIndexCount]
+
+  swapchainObject := new!SwapchainObject(Device: device,
+    Info:                   ImageInfo(
+      ImageType:    VK_IMAGE_TYPE_2D,
+      Format:       create_info.imageFormat,
+      Extent:       VkExtent3D(create_info.imageExtent.width, create_info.imageExtent.height, 1),
+      MipLevels:    1,
+      ArrayLayers:  create_info.imageArrayLayers,
+      Samples:      VK_SAMPLE_COUNT_1_BIT,
+      Tiling:       VK_IMAGE_TILING_OPTIMAL,
+      Usage:        create_info.imageUsage,
+      SharingMode:  create_info.imageSharingMode,
+      InitialLayout:       VK_IMAGE_LAYOUT_UNDEFINED
+    ),
+    Surface:         Surfaces[create_info.surface],
+    ColorSpace:      create_info.imageColorSpace,
+    PreTransform:    create_info.preTransform,
+    CompositeAlpha:  create_info.compositeAlpha,
+    PresentMode:     create_info.presentMode,
+    Clipped:         create_info.clipped
+  )
+
+  for i in (0 .. create_info.queueFamilyIndexCount) {
+    swapchainObject.Info.QueueFamilyIndices[i] =
+    queueFamilyIndices[i]
+  }
+
+  handle := ?
+  if pSwapchain == null { vkErrorNullPointer("VkSwapchain") }
+  pSwapchain[0] = handle
+  swapchainObject.VulkanHandle = handle
+  Swapchains[handle] = swapchainObject
+
+  return ?
+}
+
+@synthetic
+cmd bool ReplayCreateVkDebugReportCallback(
+  VkInstance instance,
+  const VkDebugReportCallbackCreateInfoEXT* pCreateInfo,
+  VkDebugReportCallbackEXT* pCallback) {
+  if !(instance in Instances) { vkErrorInvalidInstance(instance) }
+  if pCreateInfo == null { vkErrorNullPointer("VkDebugReportCallbackCreateInfoEXT") }
+  read(pCreateInfo[0:1])
+  handle := ?
+  if pCallback == null { vkErrorNullPointer("VkDebugReportCallbackEXT") }
+  pCallback[0] = handle
+  return ?
+}
+
+@synthetic
+cmd void ReplayDestroyVkDebugReportCallback(
+  VkInstance instance,
+  VkDebugReportCallbackEXT callback) {
+  if !(instance in Instances) { vkErrorInvalidInstance(instance) }
+}
+
+@synthetic
+cmd VkResult replayWaitForFences(
+  VkDevice device,
+  u64 count,
+  VkFence* pFences,
+  u64* pExpected,
+  bool waitAll,
+  u64 timeout) {
+  read(pExpected[0:count])
+  read(pFences[0:count])
+  return ?
+}
